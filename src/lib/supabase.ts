@@ -177,6 +177,18 @@ export async function upsertStudentToSupabase(student: StudentProfile): Promise<
   }
 }
 
+export async function deleteStudentFromSupabase(id: string): Promise<boolean> {
+  const client = getSupabase();
+  if (!client) return false;
+  try {
+    const { error } = await client.from('students').delete().eq('id', id);
+    if (error) throw error;
+    return true;
+  } catch (err) {
+    return false;
+  }
+}
+
 export async function insertAttendanceToSupabase(record: AttendanceRecord, student?: StudentProfile): Promise<boolean> {
   const client = getSupabase();
   if (!client) return false;
@@ -213,6 +225,18 @@ export async function insertAttendanceToSupabase(record: AttendanceRecord, stude
   }
 }
 
+export async function deleteAttendanceFromSupabase(id: string): Promise<boolean> {
+  const client = getSupabase();
+  if (!client) return false;
+  try {
+    const { error } = await client.from('attendance_records').delete().eq('id', id);
+    if (error) throw error;
+    return true;
+  } catch (err) {
+    return false;
+  }
+}
+
 export async function upsertAssignmentToSupabase(assignment: Assignment): Promise<boolean> {
   const client = getSupabase();
   if (!client) return false;
@@ -229,6 +253,18 @@ export async function upsertAssignmentToSupabase(assignment: Assignment): Promis
       grades: assignment.grades || {},
       updated_at: new Date().toISOString(),
     });
+    if (error) throw error;
+    return true;
+  } catch (err) {
+    return false;
+  }
+}
+
+export async function deleteAssignmentFromSupabase(id: string): Promise<boolean> {
+  const client = getSupabase();
+  if (!client) return false;
+  try {
+    const { error } = await client.from('assignments').delete().eq('id', id);
     if (error) throw error;
     return true;
   } catch (err) {
@@ -255,6 +291,18 @@ export async function upsertExamToSupabase(exam: Exam): Promise<boolean> {
       submissions: exam.submissions || {},
       updated_at: new Date().toISOString(),
     });
+    if (error) throw error;
+    return true;
+  } catch (err) {
+    return false;
+  }
+}
+
+export async function deleteExamFromSupabase(id: string): Promise<boolean> {
+  const client = getSupabase();
+  if (!client) return false;
+  try {
+    const { error } = await client.from('exams').delete().eq('id', id);
     if (error) throw error;
     return true;
   } catch (err) {
