@@ -177,6 +177,30 @@ export async function upsertStudentToSupabase(student: StudentProfile): Promise<
   }
 }
 
+export async function upsertStudentsBatchToSupabase(students: StudentProfile[]): Promise<boolean> {
+  const client = getSupabase();
+  if (!client) return false;
+  try {
+    const payload = students.map(student => ({
+      id: student.id,
+      name: student.name,
+      first_name: student.firstName || null,
+      last_name: student.lastName || null,
+      class_name: student.className,
+      national_code: student.code || null,
+      father_name: student.fatherName || null,
+      parent_phone: student.mobile || null,
+      notes: student.notes || null,
+      updated_at: new Date().toISOString(),
+    }));
+    const { error } = await client.from('students').upsert(payload);
+    if (error) throw error;
+    return true;
+  } catch (err) {
+    return false;
+  }
+}
+
 export async function deleteStudentFromSupabase(id: string): Promise<boolean> {
   const client = getSupabase();
   if (!client) return false;
