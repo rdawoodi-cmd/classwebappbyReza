@@ -31,13 +31,18 @@ import {
   X,
   AlertCircle,
   Smartphone,
-  Phone
+  Phone,
+  FileArchive,
+  Database,
+  RefreshCw,
+  AlertTriangle
 } from 'lucide-react';
 import { AppConfig, StudentProfile, TeacherAccount, AttendanceRecord, Assignment, Exam } from '../types';
 import { ClassManageModal } from './ClassManageModal';
 import { APP_VERSION_FA, APP_VERSION, APP_BUILD_DATE_FA, APP_BUILD_NOTES } from '../version';
 import { exportBackupJSON } from '../utils/storage';
-import { toPersianDigits } from '../utils/persianDate';
+import { toPersianDigits, sortClassesCustom } from '../utils/persianDate';
+import { isSupabaseConfigured, testSupabaseConnection } from '../lib/supabase';
 
 interface ManagerPanelProps {
   config: AppConfig;
@@ -51,6 +56,7 @@ interface ManagerPanelProps {
   onUpdateConfig: (newConfig: AppConfig) => void;
   onUpdateStudents: (updatedStudents: StudentProfile[]) => void;
   onRestoreBackup: (parsedData: any) => void;
+  onSaveChanges?: () => void;
 }
 
 type ManagerSubTab = 'classes-students' | 'teachers' | 'school-security' | 'deploy-backup';
@@ -67,11 +73,29 @@ export const ManagerPanel: React.FC<ManagerPanelProps> = ({
   onUpdateConfig,
   onUpdateStudents,
   onRestoreBackup,
+  onSaveChanges,
 }) => {
   // Login States
   const [pinInput, setPinInput] = useState('');
   const [loginError, setLoginError] = useState('');
   const [showPin, setShowPin] = useState(false);
+
+  // Supabase connection testing state
+  const [isTestingSupabase, setIsTestingSupabase] = useState(false);
+  const [supabaseTestResult, setSupabaseTestResult] = useState<{ success: boolean; message: string } | null>(null);
+
+  const handleTestSupabase = async () => {
+    setIsTestingSupabase(true);
+    setSupabaseTestResult(null);
+    try {
+      const res = await testSupabaseConnection();
+      setSupabaseTestResult(res);
+    } catch (err: any) {
+      setSupabaseTestResult({ success: false, message: err.message || 'خطا در ارتباط با دیتابیس سوپابیس' });
+    } finally {
+      setIsTestingSupabase(false);
+    }
+  };
 
   // Active sub-tab
   const [subTab, setSubTab] = useState<ManagerSubTab>('classes-students');
@@ -130,16 +154,21 @@ export const ManagerPanel: React.FC<ManagerPanelProps> = ({
   const [editFatherName, setEditFatherName] = useState('');
   const [editMobile, setEditMobile] = useState('');
 
+  // Deletion modal states
+  const [deletingClass, setDeletingClass] = useState<string | null>(null);
+  const [deletingSubject, setDeletingSubject] = useState<string | null>(null);
+
   // Subjects
   const [newSubjectNameInput, setNewSubjectNameInput] = useState('');
 
   // --- Teachers State ---
   const [editingTeacherId, setEditingTeacherId] = useState<string | null>(null);
+  const [deletingTeacher, setDeletingTeacher] = useState<TeacherAccount | null>(null);
+
+  // Box 1 State: Teacher Account Creation/Editing
   const [newTeacherName, setNewTeacherName] = useState('');
   const [newTeacherUsername, setNewTeacherUsername] = useState('');
   const [newTeacherPin, setNewTeacherPin] = useState('');
-  const [newTeacherSubject, setNewTeacherSubject] = useState(config.subjects[0] || 'فرهنگ و هنر');
-  const [newTeacherClasses, setNewTeacherClasses] = useState<string[]>(['هشتم ب']);
 
   // --- Security & School Settings States ---
   const [currentManagerPin, setCurrentManagerPin] = useState(config.managerPin || '9876');
@@ -327,30 +356,37 @@ export const ManagerPanel: React.FC<ManagerPanelProps> = ({
 
   // 3. Remove class
   const handleRemoveClass = (className: string) => {
-    const studentCount = students.filter((s) => s.className === className).length;
-    const warning = studentCount > 0
-      ? `توجه: کلاس «${className}» دارای ${studentCount} دانش‌آموز است! آیا از حذف کامل این کلاس اطمینان دارید؟`
-      : `آیا از حذف کلاس «${className}» اطمینان دارید؟`;
+    setDeletingClass(className);
+  };
 
-    if (confirm(warning)) {
-      const updatedClasses = config.classes.filter((c) => c !== className);
-      const updatedLinks = { ...(config.classEitaaLinks || {}) };
-      delete updatedLinks[className];
+  const confirmDeleteClass = () => {
+    if (!deletingClass) return;
+    const className = deletingClass;
+    const updatedClasses = config.classes.filter((c) => c !== className);
+    const updatedLinks = { ...(config.classEitaaLinks || {}) };
+    delete updatedLinks[className];
 
-      onUpdateConfig({
-        ...config,
-        classes: updatedClasses,
-        classEitaaLinks: updatedLinks,
-      });
+    const updatedTeachers = (config.teachers || []).map((t) => ({
+      ...t,
+      allowedClasses: t.allowedClasses ? t.allowedClasses.filter((c) => c !== className) : updatedClasses,
+    }));
 
-      if (activeClass === className) {
-        setActiveClass(updatedClasses[0] || '');
-      }
-      if (classModalOpen === className) {
-        setClassModalOpen(null);
-      }
-      showFeedback(`کلاس «${className}» حذف شد.`);
+    onUpdateConfig({
+      ...config,
+      classes: updatedClasses,
+      teachers: updatedTeachers,
+      classEitaaLinks: updatedLinks,
+    });
+
+    if (activeClass === className) {
+      setActiveClass(updatedClasses[0] || '');
     }
+    if (classModalOpen === className) {
+      setClassModalOpen(null);
+    }
+    setDeletingClass(null);
+    showFeedback(`کلاس «${className}» با موفقیت حذف شد.`);
+    alert(`کلاس «${className}» با موفقیت حذف شد.`);
   };
 
   // 4. Save Eitaa link for active class
@@ -501,15 +537,14 @@ export const ManagerPanel: React.FC<ManagerPanelProps> = ({
   // 8. Delete student
   const handleDeleteStudent = (id: string) => {
     const st = students.find((s) => s.id === id);
-    if (confirm(`آیا از حذف دانش‌آموز «${st?.name}» اطمینان دارید؟`)) {
-      onUpdateStudents(students.filter((s) => s.id !== id));
-      setSelectedStudentIds((prev) => {
-        const next = new Set(prev);
-        next.delete(id);
-        return next;
-      });
-      showFeedback('دانش‌آموز با موفقیت حذف گردید.');
-    }
+    const studentName = st?.name || 'دانش‌آموز';
+    onUpdateStudents(students.filter((s) => s.id !== id));
+    setSelectedStudentIds((prev) => {
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+    showFeedback(`دانش‌آموز «${studentName}» با موفقیت حذف گردید.`);
   };
 
   // 9. Move student class
@@ -522,7 +557,7 @@ export const ManagerPanel: React.FC<ManagerPanelProps> = ({
   // 10. Bulk transfer
   const handleBulkMoveClass = (targetClass: string) => {
     if (selectedStudentIds.size === 0) {
-      alert('هیچ دانش‌آموزی انتخاب نشده است.');
+      showFeedback('هیچ دانش‌آموزی انتخاب نشده است.');
       return;
     }
     const updated = students.map((s) =>
@@ -536,14 +571,13 @@ export const ManagerPanel: React.FC<ManagerPanelProps> = ({
   // 11. Bulk delete
   const handleBulkDelete = () => {
     if (selectedStudentIds.size === 0) {
-      alert('هیچ دانش‌آموزی انتخاب نشده است.');
+      showFeedback('هیچ دانش‌آموزی انتخاب نشده است.');
       return;
     }
-    if (confirm(`آیا از حذف ${selectedStudentIds.size} دانش‌آموز انتخاب‌شده اطمینان دارید؟`)) {
-      onUpdateStudents(students.filter((s) => !selectedStudentIds.has(s.id)));
-      showFeedback(`${selectedStudentIds.size} دانش‌آموز حذف شدند.`);
-      setSelectedStudentIds(new Set());
-    }
+    const count = selectedStudentIds.size;
+    onUpdateStudents(students.filter((s) => !selectedStudentIds.has(s.id)));
+    showFeedback(`${count} دانش‌آموز با موفقیت حذف شدند.`);
+    setSelectedStudentIds(new Set());
   };
 
   // 12. Edit student modal handlers
@@ -591,80 +625,220 @@ export const ManagerPanel: React.FC<ManagerPanelProps> = ({
   };
 
   const handleRemoveSubject = (s: string) => {
-    if (confirm(`آیا از حذف درس «${s}» اطمینان دارید؟`)) {
-      onUpdateConfig({
-        ...config,
-        subjects: config.subjects.filter((x) => x !== s),
-      });
-      showFeedback(`درس «${s}» حذف شد.`);
-    }
+    setDeletingSubject(s);
+  };
+
+  const confirmDeleteSubject = () => {
+    if (!deletingSubject) return;
+    const s = deletingSubject;
+    onUpdateConfig({
+      ...config,
+      subjects: config.subjects.filter((x) => x !== s),
+    });
+    setDeletingSubject(null);
+    showFeedback(`درس «${s}» با موفقیت حذف شد.`);
+    alert(`درس «${s}» با موفقیت حذف شد.`);
   };
 
   // ==========================================
   // --- HANDLERS: TEACHERS ---
   // ==========================================
-  const handleSaveTeacher = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newTeacherName.trim() || !newTeacherPin.trim()) {
-      alert('نام دبیر و رمز ورود الزامی است.');
+
+  // Helper: Get classes assigned to a specific teacher for a specific subject (Strictly from subjectClasses)
+  const getTeacherClassesForSubject = (tch: TeacherAccount, subjectName: string): string[] => {
+    if (tch.subjectClasses && typeof tch.subjectClasses === 'object') {
+      const list = tch.subjectClasses[subjectName];
+      if (Array.isArray(list) && list.length > 0) {
+        return list.filter((c) => config.classes.includes(c));
+      }
+    }
+    return [];
+  };
+
+  const getConflictTeacher = (subjectName: string, className: string, currentTeacherId: string): string | null => {
+    const otherTeachers = (config.teachers || []).filter((t) => t.id !== currentTeacherId);
+    for (const tch of otherTeachers) {
+      const tchAssignedClasses = getTeacherClassesForSubject(tch, subjectName);
+      if (tchAssignedClasses.includes(className)) {
+        return tch.name;
+      }
+    }
+    return null;
+  };
+
+  // Handler: Matrix Toggle Class for a Teacher & Subject
+  const handleMatrixToggleClass = (teacherId: string, subjectName: string, className: string) => {
+    const conflictTeacher = getConflictTeacher(subjectName, className, teacherId);
+    if (conflictTeacher) {
+      alert(`درس «${subjectName}» در کلاس «${className}» قبلاً به آقای «${conflictTeacher}» اختصاص یافته است.`);
       return;
     }
 
     const currentTeachers = config.teachers || [];
+    const updatedTeachers = currentTeachers.map((t) => {
+      if (t.id !== teacherId) return t;
+
+      const currentSubClassesMap: Record<string, string[]> = { ...(t.subjectClasses || {}) };
+
+      const currentClassesForSub = currentSubClassesMap[subjectName] || [];
+      let updatedClassesForSub: string[];
+
+      if (currentClassesForSub.includes(className)) {
+        updatedClassesForSub = currentClassesForSub.filter((c) => c !== className);
+      } else {
+        updatedClassesForSub = sortClassesCustom([...currentClassesForSub, className]);
+      }
+
+      if (updatedClassesForSub.length > 0) {
+        currentSubClassesMap[subjectName] = updatedClassesForSub;
+      } else {
+        delete currentSubClassesMap[subjectName];
+      }
+
+      const activeSubjects = Object.keys(currentSubClassesMap);
+      const allSelectedClasses = Array.from(new Set(Object.values(currentSubClassesMap).flat()));
+
+      return {
+        ...t,
+        subjects: activeSubjects,
+        subject: activeSubjects[0] || '',
+        allowedClasses: allSelectedClasses,
+        subjectClasses: currentSubClassesMap,
+      };
+    });
+
+    onUpdateConfig({ ...config, teachers: updatedTeachers });
+  };
+
+  // Handler: Matrix Toggle All Available Classes for a Teacher & Subject
+  const handleMatrixToggleAllClassesForSubject = (teacherId: string, subjectName: string) => {
+    const targetTeacher = (config.teachers || []).find((t) => t.id === teacherId);
+    if (!targetTeacher) return;
+
+    const currentAssigned = getTeacherClassesForSubject(targetTeacher, subjectName);
+    const sortedSchoolClasses = sortClassesCustom(config.classes);
+    const availableClasses = sortedSchoolClasses.filter((cls) => {
+      const conflict = getConflictTeacher(subjectName, cls, teacherId);
+      return !conflict;
+    });
+
+    if (availableClasses.length === 0) {
+      alert(`تمام کلاس‌های درس «${subjectName}» قبلاً به دبیران دیگر اختصاص داده شده‌اند.`);
+      return;
+    }
+
+    const areAllAvailableAssigned = availableClasses.every((cls) => currentAssigned.includes(cls));
+
+    const currentTeachers = config.teachers || [];
+    const updatedTeachers = currentTeachers.map((t) => {
+      if (t.id !== teacherId) return t;
+
+      const currentSubClassesMap: Record<string, string[]> = { ...(t.subjectClasses || {}) };
+
+      if (areAllAvailableAssigned) {
+        delete currentSubClassesMap[subjectName];
+      } else {
+        currentSubClassesMap[subjectName] = [...availableClasses];
+      }
+
+      const activeSubjects = Object.keys(currentSubClassesMap);
+      const allSelectedClasses = Array.from(new Set(Object.values(currentSubClassesMap).flat()));
+
+      return {
+        ...t,
+        subjects: activeSubjects,
+        subject: activeSubjects[0] || '',
+        allowedClasses: allSelectedClasses,
+        subjectClasses: currentSubClassesMap,
+      };
+    });
+
+    onUpdateConfig({ ...config, teachers: updatedTeachers });
+  };
+
+  // Handler 1: Save Teacher Account (Box 1)
+  const handleSaveTeacherAccount = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newTeacherName.trim() || !newTeacherPin.trim()) {
+      alert('نام دبیر و رمز عبور اختصاصی الزامی است.');
+      return;
+    }
+
+    const currentTeachers = config.teachers || [];
+    let updatedTeachers: TeacherAccount[] = [];
+
     if (editingTeacherId) {
-      const updated = currentTeachers.map((t) =>
+      updatedTeachers = currentTeachers.map((t) =>
         t.id === editingTeacherId
           ? {
               ...t,
               name: newTeacherName.trim(),
               username: newTeacherUsername.trim() || t.username,
               pin: newTeacherPin.trim(),
-              subject: newTeacherSubject,
-              allowedClasses: newTeacherClasses.length > 0 ? newTeacherClasses : config.classes,
             }
           : t
       );
-      onUpdateConfig({ ...config, teachers: updated });
-      showFeedback(`اطلاعات دبیر «${newTeacherName}» به‌روزرسانی شد.`);
+      showFeedback(`اطلاعات حساب و رمز دبیر «${newTeacherName.trim()}» با موفقیت ذخیره گردید.`);
     } else {
+      const targetTeacherId = `tch-${Date.now()}`;
       const newTeacher: TeacherAccount = {
-        id: `tch-${Date.now()}`,
+        id: targetTeacherId,
         name: newTeacherName.trim(),
         username: newTeacherUsername.trim() || `teacher_${Date.now().toString().slice(-4)}`,
         pin: newTeacherPin.trim(),
-        subject: newTeacherSubject,
-        allowedClasses: newTeacherClasses.length > 0 ? newTeacherClasses : config.classes,
+        subjects: [],
+        subject: '',
+        allowedClasses: [],
+        subjectClasses: {},
       };
-      onUpdateConfig({ ...config, teachers: [...currentTeachers, newTeacher] });
-      showFeedback(`دبیر «${newTeacherName}» با رمز اختصاصی ثبت و فعال شد.`);
+      updatedTeachers = [...currentTeachers, newTeacher];
+      showFeedback(`حساب دبیر «${newTeacherName.trim()}» ایجاد شد. اکنون می‌توانید در جدول ماتریسی زیر کلاس‌های او را تعیین کنید.`);
     }
 
-    // Reset teacher form
+    onUpdateConfig({ ...config, teachers: updatedTeachers });
+
+    // Reset Box 1 fields
     setEditingTeacherId(null);
     setNewTeacherName('');
     setNewTeacherUsername('');
     setNewTeacherPin('');
-    setNewTeacherClasses(['هشتم ب']);
   };
 
-  const handleEditTeacherClick = (tch: TeacherAccount) => {
+  // Handler 2: Edit teacher account button click
+  const handleEditTeacherAccount = (tch: TeacherAccount) => {
     setEditingTeacherId(tch.id);
     setNewTeacherName(tch.name);
     setNewTeacherUsername(tch.username);
     setNewTeacherPin(tch.pin);
-    setNewTeacherSubject(tch.subject);
-    setNewTeacherClasses(tch.allowedClasses || config.classes);
+    showFeedback(`اطلاعات دبیر «${tch.name}» جهت ویرایش در کادر بالا بارگذاری گردید.`);
+  };
+
+  // Handler 3: Cancel Box 1 edit
+  const handleCancelEditTeacher = () => {
+    setEditingTeacherId(null);
+    setNewTeacherName('');
+    setNewTeacherUsername('');
+    setNewTeacherPin('');
   };
 
   const handleDeleteTeacher = (id: string) => {
     const tch = config.teachers?.find((t) => t.id === id);
-    if (confirm(`آیا از حذف دسترسی دبیر «${tch?.name}» اطمینان دارید؟`)) {
-      onUpdateConfig({
-        ...config,
-        teachers: (config.teachers || []).filter((t) => t.id !== id),
-      });
-      showFeedback(`دبیر «${tch?.name}» حذف شد.`);
+    if (tch) {
+      setDeletingTeacher(tch);
     }
+  };
+
+  const confirmDeleteTeacher = () => {
+    if (!deletingTeacher) return;
+    const teacherName = deletingTeacher.name;
+    const updatedTeachers = (config.teachers || []).filter((t) => t.id !== deletingTeacher.id);
+    onUpdateConfig({
+      ...config,
+      teachers: updatedTeachers,
+    });
+    setDeletingTeacher(null);
+    showFeedback(`دبیر «${teacherName}» با موفقیت حذف شد.`);
+    alert(`دبیر «${teacherName}» با موفقیت حذف شد.`);
   };
 
   // ==========================================
@@ -709,60 +883,67 @@ export const ManagerPanel: React.FC<ManagerPanelProps> = ({
 
   return (
     <div className="space-y-6">
-      {/* سربرگ پنل مدیریت سایت */}
-      <div className="bg-white rounded-3xl border border-amber-200 shadow-sm p-4 sm:p-6 bg-gradient-to-l from-amber-50/50 via-white to-white">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-amber-100">
+      {/* سربرگ افقی و خلوت پنل مدیریت */}
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-xs p-4 sm:p-5 space-y-3">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-amber-500 text-white flex items-center justify-center shadow-md">
-              <ShieldAlert className="w-6 h-6" />
+            <div className="w-8 h-8 rounded-xl bg-sky-600 text-white flex items-center justify-center shadow-xs">
+              <ShieldAlert className="w-4 h-4" />
             </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h2 className="text-base sm:text-lg font-extrabold text-slate-800">
-                  پنل مدیریت سایت و استقرار سامانه
-                </h2>
-                <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-300">
-                  مدیریت عالی
-                </span>
-              </div>
-              <p className="text-xs text-slate-500 mt-0.5">
-                مدیریت کلاس‌ها، لیست دانش‌آموزان، اتصال لینک‌های ایتا، دبیران، رمزها و استقرار
-              </p>
+            <div className="flex items-center gap-2">
+              <h2 className="text-sm font-extrabold text-slate-800">
+                پنل مدیریت سایت
+              </h2>
+              <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-sky-100 text-sky-800 border border-sky-200">
+                مدیریت عالی
+              </span>
             </div>
           </div>
 
           <div className="flex items-center gap-2">
             <button
+              type="button"
+              onClick={() => {
+                if (onSaveChanges) onSaveChanges();
+                showFeedback('تمامی تغییرات و تنظیمات مدیریت ذخیره و در سراسر سامانه (پنل دبیران و دانش‌آموزان) اعمال گردید.');
+              }}
+              className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl transition-all shadow-xs cursor-pointer"
+              title="ذخیره و اعمال فوری تمامی تغییرات در کل برنامه"
+            >
+              <CheckCircle2 className="w-4 h-4" />
+              <span>ذخیره تغییرات</span>
+            </button>
+            <button
               onClick={onManagerLogout}
-              className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-xl transition-colors cursor-pointer"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-xl transition-colors cursor-pointer"
             >
               <LogOut className="w-4 h-4" />
-              <span>خروج از پنل مدیریت</span>
+              <span>خروج از پنل</span>
             </button>
           </div>
         </div>
 
         {savedMsg && (
-          <div className="mt-3 p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold rounded-xl flex items-center gap-2 animate-in fade-in">
+          <div className="p-2.5 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold rounded-xl flex items-center gap-2 animate-in fade-in">
             <Check className="w-4 h-4 text-emerald-600 shrink-0" />
             <span>{savedMsg}</span>
           </div>
         )}
 
         {/* ساب‌تب‌های پنل مدیریت */}
-        <div className="flex items-center gap-2 overflow-x-auto pt-4 scrollbar-none">
+        <div className="flex items-center gap-1.5 overflow-x-auto pt-2 border-t border-slate-100 scrollbar-none">
           {[
-            { id: 'classes-students', label: 'مدیریت کلاس‌ها، دانش‌آموزان و لینک ایتا', icon: <GraduationCap className="w-4 h-4" /> },
-            { id: 'teachers', label: 'دبیران و تخصیص درس و رمز', icon: <UserCheck className="w-4 h-4" /> },
-            { id: 'school-security', label: 'رمزها و امنیت آموزشگاه', icon: <Key className="w-4 h-4" /> },
-            { id: 'deploy-backup', label: 'استقرار نتلیفای و پشتیبان‌گیری', icon: <Globe className="w-4 h-4" /> },
+            { id: 'classes-students', label: 'کلاس‌ها و دانش‌آموزان', icon: <GraduationCap className="w-4 h-4" /> },
+            { id: 'teachers', label: 'دبیران و رمزها', icon: <UserCheck className="w-4 h-4" /> },
+            { id: 'school-security', label: 'امنیت و رمزها', icon: <Key className="w-4 h-4" /> },
+            { id: 'deploy-backup', label: 'استقرار و پشتیبان‌گیری', icon: <Globe className="w-4 h-4" /> },
           ].map((tab) => (
             <button
               key={tab.id}
               onClick={() => setSubTab(tab.id as ManagerSubTab)}
-              className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
+              className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
                 subTab === tab.id
-                  ? 'bg-amber-600 text-white shadow-sm'
+                  ? 'bg-sky-600 text-white shadow-xs'
                   : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
               }`}
             >
@@ -779,7 +960,7 @@ export const ManagerPanel: React.FC<ManagerPanelProps> = ({
       {subTab === 'classes-students' && (
         <div className="space-y-6">
           {/* بخش نوار انتخاب کلاس‌ها و دکمه افزودن کلاس جدید */}
-          <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-4">
+          <div className="bg-white p-3.5 sm:p-4 rounded-2xl border border-slate-200 shadow-xs space-y-3 max-w-2xl mx-auto">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
                 <h3 className="text-sm font-extrabold text-slate-800 flex items-center gap-2">
@@ -866,9 +1047,9 @@ export const ManagerPanel: React.FC<ManagerPanelProps> = ({
               </form>
             )}
 
-            {/* کارت‌های سوییچ و مدیریت کلاس‌ها با نوشته‌های بزرگ و خوانا */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 pt-2">
-              {config.classes.map((cls) => {
+            {/* کادرهای افقی زیر هم با طیف آبی برای مدیریت و انتخاب کلاس‌ها */}
+            <div className="space-y-3 pt-2">
+              {sortClassesCustom(config.classes).map((cls) => {
                 const isActive = cls === activeClass;
                 const count = students.filter((s) => s.className === cls).length;
                 const eLink = config.classEitaaLinks?.[cls];
@@ -882,71 +1063,87 @@ export const ManagerPanel: React.FC<ManagerPanelProps> = ({
                   <div
                     key={cls}
                     onClick={() => handleOpenClassModal(cls)}
-                    className={`relative p-5 rounded-3xl border-2 transition-all cursor-pointer flex flex-col justify-between group hover:shadow-lg ${
+                    className={`p-4 rounded-2xl border transition-all cursor-pointer flex flex-col sm:flex-row sm:items-center justify-between gap-3 group hover:shadow-md ${
                       isActive
-                        ? 'bg-amber-50/70 border-amber-500 shadow-md ring-2 ring-amber-300'
-                        : 'bg-white hover:bg-slate-50 border-slate-200 hover:border-amber-300 shadow-xs'
+                        ? 'bg-blue-50/90 border-blue-500 shadow-xs ring-2 ring-blue-300/60'
+                        : 'bg-white hover:bg-blue-50/40 border-slate-200 hover:border-blue-300 shadow-2xs'
                     }`}
                   >
-                    <div>
-                      {/* ردیف بالای کارت: آیکون و دکمه‌های تغییرنام و حذف */}
-                      <div className="flex items-center justify-between mb-3">
-                        <div className="w-12 h-12 rounded-2xl bg-amber-100 text-amber-800 flex items-center justify-center font-black shadow-inner group-hover:scale-105 transition-transform">
-                          <GraduationCap className="w-7 h-7 text-amber-700" />
+                    {/* سمت راست: آیکون کلاس، عنوان و مشخصات */}
+                    <div className="flex items-center gap-3.5 min-w-0">
+                      <div className="w-11 h-11 rounded-2xl bg-blue-100 text-blue-700 flex items-center justify-center font-bold shrink-0 shadow-2xs group-hover:scale-105 transition-transform">
+                        <GraduationCap className="w-6 h-6 text-blue-600" />
+                      </div>
+
+                      <div className="space-y-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <h4 className="text-base font-extrabold text-slate-900 group-hover:text-blue-700 transition-colors">
+                            کلاس {cls}
+                          </h4>
+                          {isActive && (
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-600 text-white">
+                              کلاس فعال
+                            </span>
+                          )}
                         </div>
 
-                        <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
-                          <button
-                            type="button"
-                            onClick={() => handleStartRename(cls)}
-                            className="p-2 rounded-xl text-slate-400 hover:text-amber-700 hover:bg-amber-100 transition-colors cursor-pointer"
-                            title="تغییر نام کلاس"
-                          >
-                            <Edit3 className="w-4 h-4" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleRemoveClass(cls)}
-                            className="p-2 rounded-xl text-slate-400 hover:text-rose-600 hover:bg-rose-100 transition-colors cursor-pointer"
-                            title="حذف کلاس"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
+                        {/* اطلاعات مشخصات (تعداد دانش‌آموزان و وضعیت ایتا) */}
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg bg-sky-50 text-sky-800 text-xs font-bold border border-sky-200/80">
+                            <Users className="w-3.5 h-3.5 text-sky-600" />
+                            <span>{toPersianDigits(count)} دانش‌آموز</span>
+                          </span>
+
+                          {connectedSubjectsCount > 0 ? (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg bg-emerald-50 text-emerald-800 text-xs font-bold border border-emerald-200">
+                              <MessageSquare className="w-3.5 h-3.5 text-emerald-600" />
+                              <span>{toPersianDigits(connectedSubjectsCount)} درس ایتا متصل</span>
+                            </span>
+                          ) : hasEitaa ? (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg bg-emerald-50 text-emerald-800 text-xs font-bold border border-emerald-200">
+                              <MessageSquare className="w-3.5 h-3.5 text-emerald-600" />
+                              <span>ایتا عمومی متصل</span>
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg bg-slate-100 text-slate-500 text-xs font-medium border border-slate-200">
+                              <MessageSquare className="w-3.5 h-3.5 text-slate-400" />
+                              <span>بدون ایتا</span>
+                            </span>
+                          )}
                         </div>
                       </div>
+                    </div>
 
-                      {/* نام کلاس با فونت بسیار بزرگ و پررنگ */}
-                      <h4 className="text-xl sm:text-2xl font-black text-slate-900 group-hover:text-amber-700 transition-colors">
-                        کلاس {cls}
-                      </h4>
+                    {/* سمت چپ: دکمه‌های عملیاتی (ویرایش نام، حذف، و ورود به مدیریت کلاس) */}
+                    <div className="flex items-center justify-end gap-2 shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-100" onClick={(e) => e.stopPropagation()}>
+                      <button
+                        type="button"
+                        onClick={() => handleStartRename(cls)}
+                        className="px-3 py-1.5 rounded-xl text-xs font-bold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200/80 transition-colors cursor-pointer flex items-center gap-1"
+                        title="تغییر نام کلاس"
+                      >
+                        <Edit3 className="w-3.5 h-3.5 text-blue-600" />
+                        <span>تغییر نام</span>
+                      </button>
 
-                      {/* اطلاعات تعداد دانش‌آموزان با فونت بزرگ */}
-                      <div className="mt-3 flex flex-wrap items-center gap-2">
-                        <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-blue-50 text-blue-800 text-xs sm:text-sm font-bold border border-blue-200/70">
-                          <Users className="w-4 h-4 text-blue-600" />
-                          <span>{toPersianDigits(count)} دانش‌آموز ثبت‌شده</span>
-                        </span>
-                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveClass(cls)}
+                        className="px-3 py-1.5 rounded-xl text-xs font-bold text-rose-600 bg-rose-50 hover:bg-rose-100 border border-rose-200/80 transition-colors cursor-pointer flex items-center gap-1"
+                        title="حذف کامل این کلاس"
+                      >
+                        <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+                        <span>حذف</span>
+                      </button>
 
-                      {/* وضعیت اتصال لینک گروه ایتا با نوشته بزرگ و خوانا */}
-                      <div className="mt-2.5">
-                        {connectedSubjectsCount > 0 ? (
-                          <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-50 text-emerald-800 text-xs sm:text-sm font-bold border border-emerald-200">
-                            <MessageSquare className="w-4 h-4 text-emerald-600" />
-                            <span>{toPersianDigits(connectedSubjectsCount)} گروه درسی ایتا متصل</span>
-                          </span>
-                        ) : hasEitaa ? (
-                          <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-50 text-emerald-800 text-xs sm:text-sm font-bold border border-emerald-200">
-                            <MessageSquare className="w-4 h-4 text-emerald-600" />
-                            <span>لینک عمومی ایتا متصل</span>
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-100 text-slate-500 text-xs sm:text-sm font-medium border border-slate-200">
-                            <MessageSquare className="w-4 h-4 text-slate-400" />
-                            <span>بدون لینک گروه ایتا</span>
-                          </span>
-                        )}
-                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleOpenClassModal(cls)}
+                        className="px-3.5 py-1.5 rounded-xl text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 shadow-xs transition-colors cursor-pointer flex items-center gap-1"
+                      >
+                        <span>مدیریت کلاس</span>
+                        <span className="text-[10px]">←</span>
+                      </button>
                     </div>
                   </div>
                 );
@@ -954,10 +1151,10 @@ export const ManagerPanel: React.FC<ManagerPanelProps> = ({
             </div>
 
             {/* راهنمای دسترسی به پنجره هر کلاس */}
-            <div className="bg-amber-50/70 border border-amber-200 p-4 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-amber-900 mt-3">
+            <div className="bg-blue-50/70 border border-blue-200 p-4 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-blue-900 mt-3">
               <div className="flex items-center gap-2.5 font-bold">
-                <GraduationCap className="w-5 h-5 text-amber-600 shrink-0" />
-                <span>برای افزودن یا کم کردن دانش‌آموزان و تنظیم لینک گروه ایتا، روی کادر کلاس مورد نظر کلیک کنید تا پنجره اختصاصی آن باز شود.</span>
+                <GraduationCap className="w-5 h-5 text-blue-600 shrink-0" />
+                <span>برای افزودن یا کم کردن دانش‌آموزان و تنظیم لینک گروه ایتا، روی کادر افقی کلاس مورد نظر کلیک کنید تا پنجره اختصاصی آن باز شود.</span>
               </div>
             </div>
           </div>
@@ -999,7 +1196,7 @@ export const ManagerPanel: React.FC<ManagerPanelProps> = ({
                   </button>
                   <button
                     onClick={handleSaveRename}
-                    className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold shadow-xs cursor-pointer"
+                    className="px-4 py-2 bg-sky-600 hover:bg-sky-700 text-white rounded-xl text-xs font-bold shadow-xs cursor-pointer"
                   >
                     ذخیره نام جدید
                   </button>
@@ -1116,7 +1313,7 @@ export const ManagerPanel: React.FC<ManagerPanelProps> = ({
           {/* مدیریت عناوین دروس مدرسه */}
           <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-3">
             <h4 className="text-xs font-extrabold text-slate-800 flex items-center gap-2">
-              <BookOpen className="w-4 h-4 text-amber-600" />
+              <BookOpen className="w-4 h-4 text-blue-600" />
               <span>مدیریت عناوین دروس آموزشگاه</span>
             </h4>
             <div className="flex items-center gap-2 max-w-md">
@@ -1125,29 +1322,31 @@ export const ManagerPanel: React.FC<ManagerPanelProps> = ({
                 placeholder="درس جدید (مثلاً: علوم تجربی، زبان انگلیسی)"
                 value={newSubjectNameInput}
                 onChange={(e) => setNewSubjectNameInput(e.target.value)}
-                className="flex-1 text-xs px-3.5 py-2 border border-slate-300 rounded-xl focus:outline-amber-600"
+                className="flex-1 text-xs px-3.5 py-2 border border-slate-300 rounded-xl focus:outline-blue-600"
               />
               <button
+                type="button"
                 onClick={handleAddSubject}
-                className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold cursor-pointer shrink-0 shadow-xs"
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold cursor-pointer shrink-0 shadow-xs"
               >
                 + افزودن درس
               </button>
             </div>
 
-            <div className="flex flex-wrap gap-1.5 pt-2">
+            <div className="flex flex-wrap gap-2 pt-2">
               {config.subjects.map((s) => (
                 <span
                   key={s}
-                  className="inline-flex items-center gap-1.5 text-xs bg-slate-100 text-slate-700 px-3 py-1 rounded-xl border border-slate-200"
+                  className="inline-flex items-center gap-2 text-xs font-bold bg-blue-50/80 text-blue-900 px-3 py-1.5 rounded-xl border border-blue-200/80 shadow-2xs"
                 >
                   <span>درس {s}</span>
                   <button
+                    type="button"
                     onClick={() => handleRemoveSubject(s)}
-                    className="text-slate-400 hover:text-rose-600 cursor-pointer"
+                    className="text-slate-400 hover:text-rose-600 cursor-pointer p-0.5 hover:bg-rose-50 rounded transition-colors"
                     title="حذف درس"
                   >
-                    <Trash2 className="w-3.5 h-3.5" />
+                    <Trash2 className="w-3.5 h-3.5 text-rose-500" />
                   </button>
                 </span>
               ))}
@@ -1159,203 +1358,255 @@ export const ManagerPanel: React.FC<ManagerPanelProps> = ({
       {/* =============================================================== */}
       {/* ۲. تب دبیران و تخصیص درس و رمز ورود هر دبیر                     */}
       {/* =============================================================== */}
-      {subTab === 'teachers' && (
-        <div className="space-y-6">
-          <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-4">
+      {subTab === 'teachers' && (() => {
+        const sortedTeachers = [...(config.teachers || [])].sort((a, b) => a.name.localeCompare(b.name, 'fa'));
+        const sortedSchoolClasses = sortClassesCustom(config.classes);
+
+        return (
+          <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-5">
             <div>
               <h3 className="text-sm font-extrabold text-slate-800 flex items-center gap-2">
                 <UserCheck className="w-4 h-4 text-amber-600" />
                 <span>تعیین دبیران، درس مربوطه و رمز عبور اختصاصی</span>
               </h3>
               <p className="text-xs text-slate-500 mt-1 leading-relaxed">
-                مدیر سایت مشخص می‌کند هر دبیر چه درسی را تدریس می‌کند تا دبیر فقط به درس و نمرات خود دسترسی داشته باشد و نتواند وارد بقیه درس‌ها شود.
+                در کادر اول نام دبیر جدید و رمز عبور او را ثبت کنید، سپس در جدول ماتریسی زیر، دروس و کلاس‌های تحت تدریس هر دبیر (مرتب‌شده بر اساس حروف الفبا) را تیک بزنید.
               </p>
             </div>
 
-            {/* فرم افزودن یا ویرایش دبیر */}
-            <form onSubmit={handleSaveTeacher} className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-3">
-              <div className="text-xs font-bold text-slate-700">
-                {editingTeacherId ? '✏️ ویرایش مشخصات دبیر' : '➕ افزودن دسترسی دبیر جدید'}
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
-                <div>
-                  <label className="block text-[11px] font-bold text-slate-600 mb-1">نام و نام‌خانوادگی دبیر:</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="مثال: استاد داوودی"
-                    value={newTeacherName}
-                    onChange={(e) => setNewTeacherName(e.target.value)}
-                    className="w-full text-xs px-3 py-2 border border-slate-300 rounded-xl bg-white focus:outline-amber-600"
-                  />
+            {/* 📌 کادر اول: ثبت نام دبیر و رمز عبور اختصاصی */}
+            <form onSubmit={handleSaveTeacherAccount} className="bg-slate-50/90 p-4.5 rounded-2xl border border-slate-200 space-y-3.5 shadow-2xs max-w-2xl">
+                <div className="flex items-center justify-between border-b border-slate-200 pb-2.5">
+                  <div className="text-xs font-extrabold text-slate-800 flex items-center gap-2">
+                    <span className="w-5 h-5 rounded-full bg-amber-500 text-white flex items-center justify-center text-[11px] font-bold">۱</span>
+                    <span>کادر اول: ثبت نام دبیر و رمز عبور اختصاصی</span>
+                  </div>
+                  {editingTeacherId && (
+                    <span className="text-[10px] font-bold bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full border border-amber-300">
+                      حالت ویرایش
+                    </span>
+                  )}
                 </div>
 
-                <div>
-                  <label className="block text-[11px] font-bold text-slate-600 mb-1">درس اختصاصی دبیر:</label>
-                  <select
-                    value={newTeacherSubject}
-                    onChange={(e) => setNewTeacherSubject(e.target.value)}
-                    className="w-full text-xs px-3 py-2 border border-slate-300 rounded-xl bg-white focus:outline-amber-600 cursor-pointer"
-                  >
-                    {config.subjects.map((sub) => (
-                      <option key={sub} value={sub}>
-                        درس {sub}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-700 mb-1">نام و نام‌خانوادگی دبیر:</label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="مثال: محمدرضا داودی"
+                      value={newTeacherName}
+                      onChange={(e) => setNewTeacherName(e.target.value)}
+                      className="w-full text-xs px-3.5 py-2.5 border border-slate-300 rounded-xl bg-white focus:outline-amber-600 font-medium"
+                    />
+                  </div>
 
-                <div>
-                  <label className="block text-[11px] font-bold text-slate-600 mb-1">رمز عبور اختصاصی دبیر:</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="مثال: 1234"
-                    value={newTeacherPin}
-                    onChange={(e) => setNewTeacherPin(e.target.value)}
-                    className="w-full text-xs font-mono font-bold px-3 py-2 border border-slate-300 rounded-xl bg-white focus:outline-amber-600 text-left"
-                    dir="ltr"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-[11px] font-bold text-slate-600 mb-1">نام کاربری / شناسه (اختیاری):</label>
-                  <input
-                    type="text"
-                    placeholder="مثال: davoodi"
-                    value={newTeacherUsername}
-                    onChange={(e) => setNewTeacherUsername(e.target.value)}
-                    className="w-full text-xs font-mono px-3 py-2 border border-slate-300 rounded-xl bg-white focus:outline-amber-600 text-left"
-                    dir="ltr"
-                  />
-                </div>
-              </div>
-
-              {/* کلاس‌های مجاز برای این دبیر */}
-              <div>
-                <label className="block text-[11px] font-bold text-slate-600 mb-1.5">
-                  کلاس‌های تحت تدریس این دبیر:
-                </label>
-                <div className="flex flex-wrap gap-2">
-                  {config.classes.map((cls) => {
-                    const isChecked = newTeacherClasses.includes(cls);
-                    return (
-                      <label
-                        key={cls}
-                        className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold border transition-colors cursor-pointer ${
-                          isChecked
-                            ? 'bg-amber-100 text-amber-900 border-amber-300'
-                            : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-100'
-                        }`}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={isChecked}
-                          onChange={(e) => {
-                            if (e.target.checked) {
-                              setNewTeacherClasses([...newTeacherClasses, cls]);
-                            } else {
-                              setNewTeacherClasses(newTeacherClasses.filter((c) => c !== cls));
-                            }
-                          }}
-                          className="rounded text-amber-600"
-                        />
-                        <span>{cls}</span>
-                      </label>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-200">
-                {editingTeacherId && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setEditingTeacherId(null);
-                      setNewTeacherName('');
-                      setNewTeacherUsername('');
-                      setNewTeacherPin('');
-                    }}
-                    className="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-200 rounded-xl cursor-pointer"
-                  >
-                    انصراف
-                  </button>
-                )}
-                <button
-                  type="submit"
-                  className="px-5 py-2 bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs rounded-xl shadow-xs transition-colors cursor-pointer"
-                >
-                  {editingTeacherId ? 'ذخیره تغییرات دبیر' : 'ثبت و فعال‌سازی دبیر'}
-                </button>
-              </div>
-            </form>
-
-            {/* لیست دبیران تعریف شده */}
-            <div className="space-y-2 pt-2">
-              <div className="text-xs font-extrabold text-slate-700">
-                لیست دبیران ثبت‌شده در سامانه ({config.teachers?.length || 0} نفر):
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                {(config.teachers || []).map((tch) => (
-                  <div key={tch.id} className="bg-white p-4 rounded-2xl border border-slate-200 shadow-2xs space-y-2 hover:border-amber-300 transition-colors">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <div className="w-8 h-8 rounded-xl bg-amber-100 text-amber-800 flex items-center justify-center font-bold text-xs">
-                          {tch.name.charAt(0)}
-                        </div>
-                        <div>
-                          <h4 className="text-xs font-extrabold text-slate-800">{tch.name}</h4>
-                          <span className="text-[10px] text-slate-400 font-mono">@{tch.username}</span>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-1">
-                        <button
-                          onClick={() => handleEditTeacherClick(tch)}
-                          className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg text-xs cursor-pointer"
-                          title="ویرایش دبیر"
-                        >
-                          ✏️
-                        </button>
-                        <button
-                          onClick={() => handleDeleteTeacher(tch.id)}
-                          className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-lg text-xs cursor-pointer"
-                          title="حذف دسترسی دبیر"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-700 mb-1">رمز عبور اختصاصی دبیر:</label>
+                      <input
+                        type="text"
+                        required
+                        placeholder="مثال: 1234"
+                        value={newTeacherPin}
+                        onChange={(e) => setNewTeacherPin(e.target.value)}
+                        className="w-full text-xs font-mono font-bold px-3.5 py-2.5 border border-slate-300 rounded-xl bg-white focus:outline-amber-600 text-left"
+                        dir="ltr"
+                      />
                     </div>
 
-                    <div className="pt-1 text-xs space-y-1">
-                      <div className="flex items-center justify-between">
-                        <span className="text-slate-500">درس اختصاصی:</span>
-                        <span className="font-extrabold text-amber-800 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200">
-                          {tch.subject}
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-slate-500">رمز ورود دبیر:</span>
-                        <span className="font-mono font-bold text-slate-700 bg-slate-100 px-2 py-0.5 rounded-md">
-                          {tch.pin}
-                        </span>
-                      </div>
-                      <div className="pt-1 flex flex-wrap gap-1">
-                        {(tch.allowedClasses || config.classes).map((c) => (
-                          <span key={c} className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded">
-                            {c}
-                          </span>
-                        ))}
-                      </div>
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-700 mb-1">نام کاربری / شناسه (اختیاری):</label>
+                      <input
+                        type="text"
+                        placeholder="مثال: davoodi"
+                        value={newTeacherUsername}
+                        onChange={(e) => setNewTeacherUsername(e.target.value)}
+                        className="w-full text-xs font-mono px-3.5 py-2.5 border border-slate-300 rounded-xl bg-white focus:outline-amber-600 text-left"
+                        dir="ltr"
+                      />
                     </div>
                   </div>
-                ))}
+                </div>
+
+                <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-200">
+                  {editingTeacherId && (
+                    <button
+                      type="button"
+                      onClick={handleCancelEditTeacher}
+                      className="px-3.5 py-2 text-xs font-bold text-slate-600 hover:bg-slate-200 rounded-xl cursor-pointer"
+                    >
+                      انصراف
+                    </button>
+                  )}
+                  <button
+                    type="submit"
+                    className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs rounded-xl shadow-xs transition-colors cursor-pointer flex items-center gap-1.5"
+                  >
+                    <Check className="w-4 h-4" />
+                    <span>{editingTeacherId ? 'ذخیره نام و رمز عبور' : 'ذخیره حساب دبیر'}</span>
+                  </button>
+                </div>
+              </form>
+
+              {/* 📊 جدول ماتریسی تخصیص دروس و کلاس‌ها به دبیران */}
+              <div className="space-y-3 pt-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-slate-100/90 p-3.5 rounded-2xl border border-slate-200 shadow-2xs">
+                  <div className="text-xs font-extrabold text-slate-800 flex items-center gap-2">
+                    <div className="w-6 h-6 rounded-lg bg-blue-600 text-white flex items-center justify-center font-bold text-xs shrink-0">
+                      <BookOpen className="w-3.5 h-3.5" />
+                    </div>
+                    <div>
+                      <span>جدول ماتریسی تخصیص دروس و کلاس‌ها به دبیران</span>
+                      <span className="text-[11px] text-slate-500 font-normal mr-2">
+                        (مرتب‌شده بر اساس حروف الفبا - {sortedTeachers.length} دبیر)
+                      </span>
+                    </div>
+                  </div>
+                  <div className="text-[11px] font-bold text-slate-600 bg-white px-3 py-1.5 rounded-xl border border-slate-200">
+                    💡 با تیک زدن کلاس‌ها در مقابل نام هر دبیر، تغییرات به‌صورت آنی ذخیره می‌شود.
+                  </div>
+                </div>
+
+                {sortedTeachers.length === 0 ? (
+                  <div className="bg-white p-8 rounded-2xl border border-slate-200 text-center text-xs text-slate-500">
+                    هیچ دبیری هنوز تعریف نشده است. لطفاً از کادر بالا دبیر جدید را ثبت نمایید.
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-2xs">
+                    <table className="w-full text-right border-collapse text-xs">
+                      <thead>
+                        <tr className="bg-slate-100 border-b border-slate-200 text-slate-800 font-extrabold">
+                          <th className="p-3.5 min-w-[220px] max-w-[260px] border-l border-slate-200 sticky right-0 bg-slate-100 z-10 shadow-xs">
+                            مشخصات دبیر (الفبایی)
+                          </th>
+                          {config.subjects.map((sub) => (
+                            <th key={sub} className="p-3.5 min-w-[220px] border-l border-slate-200 text-center">
+                              <div className="font-extrabold text-amber-900 bg-amber-100/80 px-2.5 py-1 rounded-lg border border-amber-300 inline-block">
+                                درس {sub}
+                              </div>
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-200">
+                        {sortedTeachers.map((tch) => {
+                          return (
+                            <tr key={tch.id} className="hover:bg-slate-50/70 transition-colors">
+                              {/* ستون ۱: مشخصات دبیر */}
+                              <td className="p-3.5 border-l border-slate-200 sticky right-0 bg-white z-10 shadow-xs">
+                                <div className="space-y-2">
+                                  <div className="flex items-center gap-2.5">
+                                    <div className="w-8 h-8 rounded-xl bg-amber-100 text-amber-800 flex items-center justify-center font-extrabold text-xs shrink-0 border border-amber-200">
+                                      {tch.name.charAt(0)}
+                                    </div>
+                                    <div>
+                                      <div className="font-extrabold text-slate-800 text-xs">{tch.name}</div>
+                                      <div className="text-[10px] text-slate-400 font-mono">@{tch.username}</div>
+                                    </div>
+                                  </div>
+
+                                  <div className="flex items-center justify-between gap-1 pt-1.5 border-t border-slate-100">
+                                    <span className="text-[10px] font-mono font-bold bg-slate-100 text-slate-700 px-2 py-0.5 rounded-md border border-slate-200">
+                                      رمز: {tch.pin}
+                                    </span>
+                                    <div className="flex items-center gap-1">
+                                      <button
+                                        type="button"
+                                        onClick={() => handleEditTeacherAccount(tch)}
+                                        className="p-1 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer"
+                                        title="ویرایش نام و رمز عبور در کادر بالا"
+                                      >
+                                        <Edit3 className="w-3.5 h-3.5" />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleDeleteTeacher(tch.id)}
+                                        className="p-1 text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                                        title="حذف حساب دبیر"
+                                      >
+                                        <Trash2 className="w-3.5 h-3.5" />
+                                      </button>
+                                    </div>
+                                  </div>
+                                </div>
+                              </td>
+
+                              {/* ستون‌های دروس */}
+                              {config.subjects.map((sub) => {
+                                const assignedClasses = getTeacherClassesForSubject(tch, sub);
+                                const visibleClasses = sortedSchoolClasses.filter((cls) => {
+                                  const isAssignedToThisTch = assignedClasses.includes(cls);
+                                  if (isAssignedToThisTch) return true;
+                                  const conflictTeacherName = getConflictTeacher(sub, cls, tch.id);
+                                  return !conflictTeacherName;
+                                });
+
+                                return (
+                                  <td key={sub} className="p-3 border-l border-slate-200 align-top">
+                                    <div className="space-y-2">
+                                      {/* دکمه اقدام سریع */}
+                                      <div className="flex items-center justify-between border-b border-slate-100 pb-1">
+                                        <span className="text-[10px] font-extrabold text-slate-500">
+                                          کلاس‌های {sub}:
+                                        </span>
+                                        {visibleClasses.length > 0 && (
+                                          <button
+                                            type="button"
+                                            onClick={() => handleMatrixToggleAllClassesForSubject(tch.id, sub)}
+                                            className="text-[10px] font-bold text-blue-600 hover:text-blue-800 hover:underline cursor-pointer"
+                                          >
+                                            {assignedClasses.length > 0 ? 'پاکسازی / تغییر' : 'انتخاب همه'}
+                                          </button>
+                                        )}
+                                      </div>
+
+                                      {/* لیست کلاس‌ها */}
+                                      {visibleClasses.length === 0 ? (
+                                        <div className="text-[11px] text-slate-400 font-medium py-1 italic">
+                                          تمام کلاس‌ها به سایر دبیران اختصاص یافته است
+                                        </div>
+                                      ) : (
+                                        <div className="flex flex-wrap gap-1.5">
+                                          {visibleClasses.map((cls) => {
+                                            const isAssignedToThisTch = assignedClasses.includes(cls);
+
+                                            return (
+                                              <label
+                                                key={cls}
+                                                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold border transition-all cursor-pointer ${
+                                                  isAssignedToThisTch
+                                                    ? 'bg-blue-600 text-white border-blue-700 shadow-2xs'
+                                                    : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100 hover:border-slate-300'
+                                                }`}
+                                              >
+                                                <input
+                                                  type="checkbox"
+                                                  checked={isAssignedToThisTch}
+                                                  onChange={() => handleMatrixToggleClass(tch.id, sub, cls)}
+                                                  className="rounded text-blue-600 cursor-pointer"
+                                                />
+                                                <span>{cls}</span>
+                                              </label>
+                                            );
+                                          })}
+                                        </div>
+                                      )}
+                                    </div>
+                                  </td>
+                                );
+                              })}
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
             </div>
-          </div>
-        </div>
-      )}
+          );
+        })()}
 
       {/* =============================================================== */}
       {/* ۳. تب مشخصات آموزشگاه و رمزها                                   */}
@@ -1480,6 +1731,97 @@ export const ManagerPanel: React.FC<ManagerPanelProps> = ({
             </div>
           </div>
 
+          {/* پایگاه داده آنلاین سوپابیس (Supabase PostgreSQL) */}
+          <div className="bg-white p-5 rounded-2xl border border-emerald-200 bg-linear-to-br from-emerald-50/30 to-white shadow-xs space-y-4">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-emerald-100 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-emerald-600 text-white flex items-center justify-center shadow-xs">
+                  <Database className="w-4 h-4" />
+                </div>
+                <div>
+                  <h4 className="text-xs font-extrabold text-slate-800 flex items-center gap-2">
+                    <span>پایگاه‌داده ابری سوپابیس (Supabase PostgreSQL)</span>
+                    <span className="px-2 py-0.5 rounded-full bg-emerald-600 text-white font-bold text-[10px]">
+                      منطقه زمانی تهران (Asia/Tehran) • تقویم جلالی
+                    </span>
+                  </h4>
+                  <p className="text-[11px] text-slate-500">
+                    ذخیره‌سازی و همگام‌سازی ابری اطلاعات مدرسه، نمرات، حضور و غیاب، تکالیف و آزمون‌ها
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                {isSupabaseConfigured() ? (
+                  <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700 bg-emerald-100/90 px-3 py-1 rounded-full border border-emerald-300 shadow-2xs">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                    <span>متغیرهای Supabase تنظیم شده‌اند</span>
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-800 bg-amber-100/90 px-3 py-1 rounded-full border border-amber-300 shadow-2xs">
+                    <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
+                    <span>در انتظار کلیدهای Supabase (حالت LocalStorage فعال است)</span>
+                  </span>
+                )}
+              </div>
+            </div>
+
+            <div className="text-xs text-slate-600 space-y-2 leading-relaxed bg-white/80 p-3.5 rounded-xl border border-emerald-100">
+              <p className="font-bold text-slate-800 flex items-center gap-1.5">
+                <span>📋 راهنمای اتصال دیتابیس Supabase:</span>
+              </p>
+              <ol className="list-decimal list-inside space-y-1 text-[11px] text-slate-600">
+                <li>
+                  اسکریپت کامل ساخت جداول با تایم‌زون ایران در فایل <code className="font-mono bg-emerald-50 text-emerald-900 px-1.5 py-0.5 rounded font-bold">supabase-schema.sql</code> قرار دارد.
+                </li>
+                <li>
+                  وارد پنل Supabase شده و در بخش <strong>SQL Editor</strong> اسکریپت فوق را اجرا کنید تا جداول <code className="font-mono text-slate-700">students</code>، <code className="font-mono text-slate-700">attendance_records</code>، <code className="font-mono text-slate-700">assignments</code>، <code className="font-mono text-slate-700">exams</code> و <code className="font-mono text-slate-700">app_config</code> ساخته شوند.
+                </li>
+                <li>
+                  مقادیر <code className="font-mono text-slate-700">VITE_SUPABASE_URL</code> و <code className="font-mono text-slate-700">VITE_SUPABASE_ANON_KEY</code> را در متغیرهای محیطی پروژه تنظیم کنید.
+                </li>
+              </ol>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3 pt-1">
+              <button
+                type="button"
+                onClick={handleTestSupabase}
+                disabled={isTestingSupabase}
+                className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white text-xs font-bold rounded-xl shadow-xs transition-all cursor-pointer disabled:opacity-50"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isTestingSupabase ? 'animate-spin' : ''}`} />
+                <span>{isTestingSupabase ? 'در حال تست ارتباط...' : 'تست اتصال به Supabase'}</span>
+              </button>
+
+              <a
+                href="/supabase-schema.sql"
+                download="supabase-schema.sql"
+                className="flex items-center gap-1.5 px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold rounded-xl border border-slate-300 transition-colors cursor-pointer"
+              >
+                <Download className="w-3.5 h-3.5 text-slate-600" />
+                <span>دانلود اسکریپت ساخت جداول (SQL)</span>
+              </a>
+            </div>
+
+            {supabaseTestResult && (
+              <div
+                className={`p-3 rounded-xl text-xs font-medium border flex items-center gap-2 ${
+                  supabaseTestResult.success
+                    ? 'bg-emerald-50 text-emerald-900 border-emerald-200'
+                    : 'bg-rose-50 text-rose-900 border-rose-200'
+                }`}
+              >
+                {supabaseTestResult.success ? (
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                ) : (
+                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                )}
+                <span>{supabaseTestResult.message}</span>
+              </div>
+            )}
+          </div>
+
           {/* پشتیبان‌گیری و بازیابی داده‌ها */}
           <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-3">
             <h4 className="text-xs font-extrabold text-slate-800 flex items-center gap-2">
@@ -1555,6 +1897,134 @@ export const ManagerPanel: React.FC<ManagerPanelProps> = ({
             <p className="text-xs text-slate-600 leading-relaxed">
               {APP_BUILD_NOTES}
             </p>
+
+            <div className="pt-3 border-t border-slate-200/80 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-2 text-xs text-slate-600">
+                <FileArchive className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>دریافت بسته کامل سورس‌کد پروژه با تمامی ماژول‌ها و ابزارها:</span>
+              </div>
+              <a
+                href="/school_app_source_code.zip"
+                download="school_app_source_code.zip"
+                className="inline-flex items-center gap-2 px-4 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 active:scale-95 rounded-xl shadow-xs transition-all cursor-pointer whitespace-nowrap"
+              >
+                <Download className="w-4 h-4" />
+                <span>دانلود فایل کامل سورس کد (ZIP)</span>
+              </a>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Teacher Modal Confirmation */}
+      {deletingTeacher && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 space-y-4 shadow-xl border border-slate-100">
+            <div className="flex items-center gap-3 text-rose-600">
+              <div className="w-10 h-10 rounded-xl bg-rose-50 flex items-center justify-center">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <h3 className="font-extrabold text-base text-slate-800">حذف دسترسی دبیر</h3>
+            </div>
+
+            <p className="text-xs text-slate-600 leading-relaxed">
+              آیا از حذف دسترسی دبیر <strong className="text-slate-800">«{deletingTeacher.name}»</strong> اطمینان دارید؟
+            </p>
+            <p className="text-[11px] text-rose-500 bg-rose-50/70 p-2.5 rounded-xl border border-rose-100">
+              ⚠️ با حذف این دبیر، حساب کاربری و امکان ورود ایشان با رمز اختصاصی به سامانه لغو خواهد شد.
+            </p>
+
+            <div className="flex items-center justify-end gap-2.5 pt-2">
+              <button
+                type="button"
+                onClick={() => setDeletingTeacher(null)}
+                className="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl transition-colors cursor-pointer"
+              >
+                انصراف
+              </button>
+              <button
+                type="button"
+                onClick={confirmDeleteTeacher}
+                className="px-4 py-2 text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-xl shadow-xs transition-colors cursor-pointer"
+              >
+                بله، دبیر حذف شود
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Class Modal Confirmation */}
+      {deletingClass && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 space-y-4 shadow-xl border border-slate-100">
+            <div className="flex items-center gap-3 text-rose-600">
+              <div className="w-10 h-10 rounded-xl bg-rose-50 flex items-center justify-center">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <h3 className="font-extrabold text-base text-slate-800">حذف کامل کلاس</h3>
+            </div>
+
+            <p className="text-xs text-slate-600 leading-relaxed">
+              آیا از حذف کامل کلاس <strong className="text-slate-800">«{deletingClass}»</strong> اطمینان دارید؟
+            </p>
+            {students.filter((s) => s.className === deletingClass).length > 0 && (
+              <p className="text-[11px] text-amber-800 bg-amber-50 p-2.5 rounded-xl border border-amber-200">
+                ⚠️ <strong>هشدار:</strong> هم‌اکنون تعداد {toPersianDigits(students.filter((s) => s.className === deletingClass).length)} دانش‌آموز در این کلاس ثبت شده‌اند.
+              </p>
+            )}
+
+            <div className="flex items-center justify-end gap-2.5 pt-2">
+              <button
+                type="button"
+                onClick={() => setDeletingClass(null)}
+                className="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl transition-colors cursor-pointer"
+              >
+                انصراف
+              </button>
+              <button
+                type="button"
+                onClick={confirmDeleteClass}
+                className="px-4 py-2 text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-xl shadow-xs transition-colors cursor-pointer"
+              >
+                بله، کلاس حذف شود
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Subject Modal Confirmation */}
+      {deletingSubject && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 space-y-4 shadow-xl border border-slate-100">
+            <div className="flex items-center gap-3 text-rose-600">
+              <div className="w-10 h-10 rounded-xl bg-rose-50 flex items-center justify-center">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <h3 className="font-extrabold text-base text-slate-800">حذف عنوان درس</h3>
+            </div>
+
+            <p className="text-xs text-slate-600 leading-relaxed">
+              آیا از حذف درس <strong className="text-slate-800">«{deletingSubject}»</strong> از لیست دروس آموزشگاه اطمینان دارید؟
+            </p>
+
+            <div className="flex items-center justify-end gap-2.5 pt-2">
+              <button
+                type="button"
+                onClick={() => setDeletingSubject(null)}
+                className="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl transition-colors cursor-pointer"
+              >
+                انصراف
+              </button>
+              <button
+                type="button"
+                onClick={confirmDeleteSubject}
+                className="px-4 py-2 text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-xl shadow-xs transition-colors cursor-pointer"
+              >
+                بله، درس حذف شود
+              </button>
+            </div>
           </div>
         </div>
       )}

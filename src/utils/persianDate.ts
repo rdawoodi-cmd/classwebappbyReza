@@ -57,7 +57,61 @@ const persianDays = [
   'شنبه',
 ];
 
-export function getTodayShamsi(): {
+/**
+ * تبدیل زمان جاری یا مشخص به منطقه زمانی ایران (Asia/Tehran)
+ */
+export function getTehranDate(date: Date = new Date()): {
+  gy: number;
+  gm: number;
+  gd: number;
+  hours: number;
+  minutes: number;
+  seconds: number;
+  dayOfWeek: number;
+} {
+  try {
+    const formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'Asia/Tehran',
+      year: 'numeric',
+      month: 'numeric',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: 'numeric',
+      second: 'numeric',
+      hour12: false,
+    });
+    const parts = formatter.formatToParts(date);
+    const getVal = (type: string) => {
+      const p = parts.find((pt) => pt.type === type);
+      return p ? parseInt(p.value, 10) : 0;
+    };
+    const gy = getVal('year');
+    const gm = getVal('month');
+    const gd = getVal('day');
+    let hours = getVal('hour');
+    if (hours === 24) hours = 0;
+    const minutes = getVal('minute');
+    const seconds = getVal('second');
+
+    // Create a date representation to get dayOfWeek accurately in Tehran
+    const tehranDay = new Date(gy, gm - 1, gd).getDay();
+
+    return { gy, gm, gd, hours, minutes, seconds, dayOfWeek: tehranDay };
+  } catch {
+    // Fallback if Intl timezone is unavailable
+    return {
+      gy: date.getFullYear(),
+      gm: date.getMonth() + 1,
+      gd: date.getDate(),
+      hours: date.getHours(),
+      minutes: date.getMinutes(),
+      seconds: date.getSeconds(),
+      dayOfWeek: date.getDay(),
+    };
+  }
+}
+
+export function getTodayShamsi(date: Date = new Date()): {
   dateString: string;
   formattedText: string;
   year: number;
@@ -65,14 +119,16 @@ export function getTodayShamsi(): {
   day: number;
   dayName: string;
   monthName: string;
+  timeString: string;
 } {
-  const now = new Date();
-  const [jy, jm, jd] = gregorianToJalali(now.getFullYear(), now.getMonth() + 1, now.getDate());
-  const dayName = persianDays[now.getDay()];
+  const tehran = getTehranDate(date);
+  const [jy, jm, jd] = gregorianToJalali(tehran.gy, tehran.gm, tehran.gd);
+  const dayName = persianDays[tehran.dayOfWeek];
   const monthName = persianMonths[jm - 1];
   const pad = (n: number) => (n < 10 ? `0${n}` : `${n}`);
   const dateString = `${jy}/${pad(jm)}/${pad(jd)}`;
   const formattedText = `${dayName}، ${jd} ${monthName} ${jy}`;
+  const timeString = `${pad(tehran.hours)}:${pad(tehran.minutes)}:${pad(tehran.seconds)}`;
 
   return {
     dateString,
@@ -82,13 +138,14 @@ export function getTodayShamsi(): {
     day: jd,
     dayName,
     monthName,
+    timeString,
   };
 }
 
-export function getCurrentTimeString(): string {
-  const now = new Date();
+export function getCurrentTimeString(date: Date = new Date()): string {
+  const tehran = getTehranDate(date);
   const pad = (n: number) => (n < 10 ? `0${n}` : `${n}`);
-  return `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+  return `${pad(tehran.hours)}:${pad(tehran.minutes)}:${pad(tehran.seconds)}`;
 }
 
 export function toPersianDigits(num: number | string | undefined | null): string {
@@ -96,4 +153,42 @@ export function toPersianDigits(num: number | string | undefined | null): string
   const str = String(num);
   const persianDigits = ['۰', '۱', '۲', '۳', '۴', '۵', '۶', '۷', '۸', '۹'];
   return str.replace(/[0-9]/g, (w) => persianDigits[parseInt(w, 10)]);
+}
+
+export function toEnglishDigits(str: number | string | undefined | null): string {
+  if (str === undefined || str === null) return '';
+  const s = String(str);
+  const persianDigits = [/۰/g, /۱/g, /۲/g, /۳/g, /۴/g, /۵/g, /۶/g, /۷/g, /۸/g, /۹/g];
+  const arabicDigits  = [/٠/g, /١/g, /٢/g, /٣/g, /٤/g, /٥/g, /٦/g, /٧/g, /٨/g, /٩/g];
+  let res = s;
+  for (let i = 0; i < 10; i++) {
+    res = res.replace(persianDigits[i], String(i)).replace(arabicDigits[i], String(i));
+  }
+  return res;
+}
+
+/**
+ * مرتب‌سازی کلاس‌ها بر اساس پایه (هفتم، هشتم، نهم، ...) و سپس بر اساس حروف الفبا (الف، ب، ...)
+ */
+export function sortClassesCustom(classes: string[]): string[] {
+  if (!classes || !Array.isArray(classes)) return [];
+  
+  const getGradeWeight = (cls: string): number => {
+    if (cls.includes('هفتم')) return 1;
+    if (cls.includes('هشتم')) return 2;
+    if (cls.includes('نهم')) return 3;
+    if (cls.includes('دهم')) return 4;
+    if (cls.includes('یازدهم')) return 5;
+    if (cls.includes('دوازدهم')) return 6;
+    return 99;
+  };
+
+  return [...classes].sort((a, b) => {
+    const weightA = getGradeWeight(a);
+    const weightB = getGradeWeight(b);
+    if (weightA !== weightB) {
+      return weightA - weightB;
+    }
+    return a.localeCompare(b, 'fa');
+  });
 }

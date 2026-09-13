@@ -13,7 +13,9 @@ import {
   Cpu, 
   Calendar,
   Heart,
-  Laptop
+  Laptop,
+  Download,
+  FileArchive
 } from 'lucide-react';
 import { AppConfig } from '../types';
 import { APP_VERSION, APP_VERSION_FA, APP_BUILD_DATE_FA } from '../version';
@@ -60,6 +62,32 @@ export const AppInfoView: React.FC<AppInfoViewProps> = ({ config, onNavigateTab 
             <span className="text-[10px] text-blue-200/80">{APP_BUILD_DATE_FA}</span>
           </div>
         </div>
+      </div>
+
+      {/* Source Code ZIP Download Card */}
+      <div className="bg-gradient-to-r from-emerald-50 via-teal-50 to-sky-50 border-2 border-emerald-200/80 rounded-2xl p-5 sm:p-6 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="flex items-center gap-3.5">
+          <div className="w-12 h-12 rounded-2xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+            <FileArchive className="w-6 h-6" />
+          </div>
+          <div>
+            <h3 className="font-extrabold text-sm sm:text-base text-slate-800">
+              دریافت بسته کامل سورس‌کد پروژه (فایل ZIP)
+            </h3>
+            <p className="text-xs text-slate-600 mt-0.5">
+              شامل تمامی کامپوننت‌های فرانت‌اند، تنظیمات بیلد، تایپ‌ها، ابزارهای فارسی و داده‌های کامل سامانه
+            </p>
+          </div>
+        </div>
+
+        <a
+          href="/school_app_source_code.zip"
+          download="school_app_source_code.zip"
+          className="inline-flex items-center justify-center gap-2 px-5 py-3 text-xs sm:text-sm font-bold text-white bg-emerald-600 hover:bg-emerald-700 active:scale-95 rounded-xl shadow-xs transition-all cursor-pointer whitespace-nowrap shrink-0"
+        >
+          <Download className="w-4 h-4" />
+          <span>دانلود فایل زیپ کدها (ZIP)</span>
+        </a>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">

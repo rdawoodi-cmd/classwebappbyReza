@@ -16,7 +16,7 @@ import {
   X
 } from 'lucide-react';
 import { AppConfig, StudentProfile } from '../types';
-import { toPersianDigits } from '../utils/persianDate';
+import { toPersianDigits, sortClassesCustom } from '../utils/persianDate';
 
 interface ClassManageModalProps {
   isOpen: boolean;
@@ -338,15 +338,13 @@ export const ClassManageModal: React.FC<ClassManageModalProps> = ({
   // Delete single student (کم کردن دانش‌آموز)
   const handleDeleteStudent = (id: string) => {
     const st = students.find((s) => s.id === id);
-    if (confirm(`آیا از کم کردن و حذف دانش‌آموز «${st?.name}» از کلاس اطمینان دارید؟`)) {
-      onUpdateStudents(students.filter((s) => s.id !== id));
-      setSelectedStudentIds((prev) => {
-        const next = new Set(prev);
-        next.delete(id);
-        return next;
-      });
-      showFeedback(`دانش‌آموز «${st?.name}» با موفقیت حذف گردید.`);
-    }
+    onUpdateStudents(students.filter((s) => s.id !== id));
+    setSelectedStudentIds((prev) => {
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+    showFeedback(`دانش‌آموز «${st?.name || ''}» با موفقیت حذف گردید.`);
   };
 
   // Move single student to another class
@@ -359,11 +357,10 @@ export const ClassManageModal: React.FC<ClassManageModalProps> = ({
   // Bulk delete selected students (کم کردن دسته‌جمعی)
   const handleBulkDelete = () => {
     if (selectedStudentIds.size === 0) return;
-    if (confirm(`آیا از کم کردن و حذف ${selectedStudentIds.size} دانش‌آموز انتخاب‌شده اطمینان دارید؟`)) {
-      onUpdateStudents(students.filter((s) => !selectedStudentIds.has(s.id)));
-      setSelectedStudentIds(new Set());
-      showFeedback(`${selectedStudentIds.size} دانش‌آموز از کلاس حذف شدند.`);
-    }
+    const count = selectedStudentIds.size;
+    onUpdateStudents(students.filter((s) => !selectedStudentIds.has(s.id)));
+    setSelectedStudentIds(new Set());
+    showFeedback(`${count} دانش‌آموز از کلاس حذف شدند.`);
   };
 
   // Bulk move selected students
@@ -425,7 +422,7 @@ export const ClassManageModal: React.FC<ClassManageModalProps> = ({
                 onChange={(e) => onSelectClass(e.target.value)}
                 className="bg-transparent text-white font-bold text-[11px] border-0 cursor-pointer focus:outline-none"
               >
-                {config.classes.map((c) => (
+                {sortClassesCustom(config.classes).map((c) => (
                   <option key={c} value={c} className="bg-slate-800 text-white">
                     {c}
                   </option>
@@ -920,7 +917,7 @@ export const ClassManageModal: React.FC<ClassManageModalProps> = ({
                             className="text-[11px] font-bold px-2 py-1 bg-white border border-slate-200 rounded-lg cursor-pointer text-slate-600 hover:border-slate-400"
                             title="انتقال دانش‌آموز به کلاس دیگر"
                           >
-                            {config.classes.map((c) => (
+                            {sortClassesCustom(config.classes).map((c) => (
                               <option key={c} value={c}>
                                 {c}
                               </option>

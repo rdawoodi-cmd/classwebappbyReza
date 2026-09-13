@@ -30,8 +30,8 @@ import {
   ArrowUpDown,
   MessageSquare
 } from 'lucide-react';
-import { Exam, QuizQuestion, ExamSubmission, AppConfig, Student } from '../types';
-import { toPersianDigits, getTodayShamsi } from '../utils/persianDate';
+import { Exam, QuizQuestion, ExamSubmission, AppConfig, Student, AcademicTerm } from '../types';
+import { toPersianDigits, toEnglishDigits, getTodayShamsi } from '../utils/persianDate';
 import { sounds } from '../utils/sound';
 import confetti from 'canvas-confetti';
 
@@ -40,6 +40,10 @@ interface ExamManagerProps {
   exams: Exam[];
   students?: Student[];
   activeSubject?: string;
+  activeClass?: string;
+  activeTerm?: AcademicTerm;
+  assignedClasses?: string[];
+  assignedSubjects?: string[];
   onCreateExam: (exam: Omit<Exam, 'id' | 'createdAt' | 'submissions'>) => void;
   onUpdateExam: (exam: Exam) => void;
   onDeleteExam: (id: string) => void;
@@ -51,6 +55,10 @@ export const ExamManager: React.FC<ExamManagerProps> = ({
   exams,
   students = [],
   activeSubject,
+  activeClass,
+  activeTerm = 'ترم اول',
+  assignedClasses,
+  assignedSubjects,
   onCreateExam,
   onUpdateExam,
   onDeleteExam,
@@ -62,7 +70,9 @@ export const ExamManager: React.FC<ExamManagerProps> = ({
   
   // Form fields
   const [title, setTitle] = useState('');
-  const [targetClass, setTargetClass] = useState('همه کلاس‌ها');
+  const [targetClass, setTargetClass] = useState(
+    activeClass && activeClass !== 'all' ? activeClass : 'همه کلاس‌ها'
+  );
   const [subject, setSubject] = useState(
     activeSubject && activeSubject !== 'all' ? activeSubject : (config.subjects[0] || 'فرهنگ و هنر')
   );
@@ -76,18 +86,28 @@ export const ExamManager: React.FC<ExamManagerProps> = ({
   const [endTime, setEndTime] = useState('12:00');
 
   // Filters for exam list
-  const [filterClass, setFilterClass] = useState('all');
+  const [filterClass, setFilterClass] = useState(activeClass || 'all');
   const [filterSubject, setFilterSubject] = useState(activeSubject || 'all');
 
   // Submissions sorting: 'family_asc' | 'score_desc' | 'time_desc'
   const [submissionSortBy, setSubmissionSortBy] = useState<'family_asc' | 'score_desc' | 'time_desc'>('family_asc');
 
-  // Sync with activeSubject prop
+  // Sync with activeSubject and activeClass props
   useEffect(() => {
     if (activeSubject && activeSubject !== 'all') {
       setFilterSubject(activeSubject);
+      setSubject(activeSubject);
     }
   }, [activeSubject]);
+
+  useEffect(() => {
+    if (activeClass) {
+      setFilterClass(activeClass);
+      if (activeClass !== 'all') {
+        setTargetClass(activeClass);
+      }
+    }
+  }, [activeClass]);
   
   // Descriptive file upload
   const [examFile, setExamFile] = useState<{ name: string; size: string; data: string; type: string } | null>(null);
@@ -285,6 +305,7 @@ export const ExamManager: React.FC<ExamManagerProps> = ({
         type: examType,
         className: targetClass,
         subject,
+        term: activeTerm,
         description: description.trim(),
         durationMinutes: Number(durationMinutes) || 15,
         hasSchedule: hasSchedule,
@@ -495,7 +516,7 @@ export const ExamManager: React.FC<ExamManagerProps> = ({
                     className="w-full text-xs px-2.5 py-2 border border-slate-300 rounded-xl bg-slate-50 cursor-pointer"
                   >
                     <option value="همه کلاس‌ها">همه کلاس‌ها</option>
-                    {config.classes.map((c) => (
+                    {(assignedClasses && assignedClasses.length > 0 ? assignedClasses : config.classes).map((c) => (
                       <option key={c} value={c}>
                         {c}
                       </option>
@@ -510,7 +531,7 @@ export const ExamManager: React.FC<ExamManagerProps> = ({
                     onChange={(e) => setSubject(e.target.value)}
                     className="w-full text-xs px-2.5 py-2 border border-slate-300 rounded-xl bg-slate-50 cursor-pointer"
                   >
-                    {config.subjects.map((s) => (
+                    {(assignedSubjects && assignedSubjects.length > 0 ? assignedSubjects : config.subjects).map((s) => (
                       <option key={s} value={s}>
                         {s}
                       </option>
@@ -1274,54 +1295,68 @@ export const ExamManager: React.FC<ExamManagerProps> = ({
 
                         return (
                           <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
-                            <input
-                              type="text"
-                              placeholder={selectedExam.type === 'descriptive' ? 'نمره از ۲۰ (مثال: ۱۹)' : 'اصلاح نمره'}
-                              defaultValue={sub.teacherScore || (selectedExam.type === 'multiple-choice' ? String(score20) : '')}
-                              onChange={(e) => setGradingScores({ ...gradingScores, [sub.studentName]: e.target.value })}
-                              className="w-24 text-xs font-bold px-2 py-1.5 border border-slate-300 rounded-lg bg-white text-center focus:outline-blue-600"
-                            />
-                            <input
-                              type="text"
-                              placeholder="توضیحات و بازخورد دبیر برای دانش‌آموز..."
-                              defaultValue={sub.teacherFeedback || ''}
-                              onChange={(e) => setGradingFeedbacks({ ...gradingFeedbacks, [sub.studentName]: e.target.value })}
-                              className="w-52 text-xs px-2 py-1.5 border border-slate-300 rounded-lg bg-white focus:outline-blue-600"
-                            />
-                            <button
-                              type="button"
-                              onClick={() => {
-                                const sc = gradingScores[sub.studentName] ?? sub.teacherScore ?? (selectedExam.type === 'multiple-choice' ? String(score20) : '');
-                                const fb = gradingFeedbacks[sub.studentName] ?? sub.teacherFeedback ?? '';
-                                onGradeSubmission(selectedExam.id, sub.studentName, sc, fb);
-                                setSavedStudentSet((prev) => ({ ...prev, [sub.studentName]: true }));
-                                setSavedStudentName(sub.studentName);
-                                setNotice({
-                                  title: 'بازخورد دبیر با موفقیت ثبت شد',
-                                  desc: `نمره (${toPersianDigits(sc || 'ثبت شده')}) و نظر دبیر برای دانش‌آموز «${sub.studentName}» با موفقیت ذخیره شد.`
-                                });
-                                try {
-                                  sounds.playCheer();
-                                } catch {}
-                              }}
-                              className={`px-3 py-1.5 font-bold text-xs rounded-lg shadow-xs cursor-pointer flex items-center gap-1 transition-all duration-200 ${
-                                isGraded
-                                  ? 'bg-emerald-600 hover:bg-emerald-700 text-white ring-1 ring-emerald-300'
-                                  : 'bg-blue-600 hover:bg-blue-700 text-white'
-                              }`}
-                            >
-                              {isGraded ? (
+                            {(() => {
+                              const subKey = sub.studentId || sub.studentName;
+                              return (
                                 <>
-                                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-100" />
-                                  <span>✓ نظر و نمره ثبت شد</span>
+                                  <input
+                                    type="text"
+                                    placeholder={selectedExam.type === 'descriptive' ? 'نمره از ۲۰ (مثال: ۱۹)' : 'اصلاح نمره'}
+                                    defaultValue={sub.teacherScore || (selectedExam.type === 'multiple-choice' ? String(score20) : '')}
+                                    onChange={(e) => setGradingScores({ ...gradingScores, [subKey]: e.target.value })}
+                                    className="w-24 text-xs font-bold px-2 py-1.5 border border-slate-300 rounded-lg bg-white text-center focus:outline-blue-600"
+                                  />
+                                  <input
+                                    type="text"
+                                    placeholder="توضیحات و بازخورد دبیر برای دانش‌آموز..."
+                                    defaultValue={sub.teacherFeedback || ''}
+                                    onChange={(e) => setGradingFeedbacks({ ...gradingFeedbacks, [subKey]: e.target.value })}
+                                    className="w-52 text-xs px-2 py-1.5 border border-slate-300 rounded-lg bg-white focus:outline-blue-600"
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const sc = gradingScores[subKey] ?? sub.teacherScore ?? (selectedExam.type === 'multiple-choice' ? String(score20) : '');
+                                      const fb = gradingFeedbacks[subKey] ?? sub.teacherFeedback ?? '';
+                                      if (sc && sc.trim() !== '') {
+                                        const parsed = parseFloat(toEnglishDigits(sc));
+                                        if (isNaN(parsed) || parsed < 0 || parsed > 20) {
+                                          alert('خطا: نمره عددی باید مقداری بین ۰ تا ۲۰ باشد.');
+                                          return;
+                                        }
+                                      }
+                                      onGradeSubmission(selectedExam.id, subKey, sc, fb);
+                                      setSavedStudentSet((prev) => ({ ...prev, [subKey]: true }));
+                                      setSavedStudentName(sub.studentName);
+                                      setNotice({
+                                        title: 'بازخورد دبیر با موفقیت ثبت شد',
+                                        desc: `نمره (${toPersianDigits(sc || 'ثبت شده')}) و نظر دبیر برای دانش‌آموز «${sub.studentName}» با موفقیت ذخیره شد.`
+                                      });
+                                      try {
+                                        sounds.playCheer();
+                                      } catch {}
+                                    }}
+                                    className={`px-3 py-1.5 font-bold text-xs rounded-lg shadow-xs cursor-pointer flex items-center gap-1 transition-all duration-200 ${
+                                      isGraded
+                                        ? 'bg-emerald-600 hover:bg-emerald-700 text-white ring-1 ring-emerald-300'
+                                        : 'bg-blue-600 hover:bg-blue-700 text-white'
+                                    }`}
+                                  >
+                                    {isGraded ? (
+                                      <>
+                                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-100" />
+                                        <span>✓ نظر و نمره ثبت شد</span>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <MessageSquare className="w-3.5 h-3.5" />
+                                        <span>ثبت نظر و نمره</span>
+                                      </>
+                                    )}
+                                  </button>
                                 </>
-                              ) : (
-                                <>
-                                  <MessageSquare className="w-3.5 h-3.5" />
-                                  <span>ثبت نظر و نمره</span>
-                                </>
-                              )}
-                            </button>
+                              );
+                            })()}
                           </div>
                         );
                       })()}
@@ -1364,9 +1399,11 @@ export const ExamManager: React.FC<ExamManagerProps> = ({
                 type="button"
                 onClick={() => {
                   if (deletingExam) {
+                    const examTitle = deletingExam.title;
                     onDeleteExam(deletingExam.id);
                     if (selectedExamId === deletingExam.id) setSelectedExamId(null);
                     setDeletingExam(null);
+                    alert(`آزمون «${examTitle}» با موفقیت حذف شد.`);
                   }
                 }}
                 className="px-4 py-2 text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-xl shadow-xs transition-colors cursor-pointer"

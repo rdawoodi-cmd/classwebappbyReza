@@ -17,7 +17,23 @@ import {
 } from './types';
 import { loadLocalState, saveLocalState, FullAppState } from './utils/storage';
 import { getTodayShamsi, getCurrentTimeString, toPersianDigits } from './utils/persianDate';
+import { getTeacherAssignedSubjects } from './utils/teacherUtils';
+import { sounds } from './utils/sound';
 import { APP_VERSION_FA } from './version';
+import { 
+  isSupabaseConfigured, 
+  fetchFullStateFromSupabase, 
+  upsertConfigToSupabase, 
+  upsertStudentToSupabase, 
+  deleteStudentFromSupabase,
+  upsertStudentsBatchToSupabase,
+  insertAttendanceToSupabase,
+  deleteAttendanceFromSupabase,
+  upsertAssignmentToSupabase,
+  deleteAssignmentFromSupabase,
+  upsertExamToSupabase,
+  deleteExamFromSupabase
+} from './lib/supabase';
 
 export default function App() {
   const [appState, setAppState] = useState<FullAppState>(() => loadLocalState());
@@ -48,10 +64,13 @@ export default function App() {
   });
 
   const handleSelectActiveSubject = (subj: string) => {
-    // If a specific teacher is logged in, restrict changing to other subjects
-    if (currentTeacher && subj !== currentTeacher.subject) {
-      alert(`دسترسی محدود است: شما به عنوان دبیر درس «${currentTeacher.subject}» وارد شده‌اید و فقط مجاز به مشاهده همین درس هستید.`);
-      return;
+    // If a specific teacher is logged in, restrict changing to subjects NOT assigned to this teacher
+    if (currentTeacher) {
+      const allowed = getTeacherAssignedSubjects(currentTeacher, appState.config);
+      if (subj !== 'all' && !allowed.includes(subj)) {
+        alert(`دسترسی محدود است: شما به عنوان دبیر مجاز به مشاهده درس «${subj}» نیستید.`);
+        return;
+      }
     }
     setActiveSubject(subj);
     localStorage.setItem('teacher_active_subject', subj);
@@ -60,12 +79,35 @@ export default function App() {
   const [currentTime, setCurrentTime] = useState<string>(() => getCurrentTimeString());
   const [currentDate, setCurrentDate] = useState<string>(() => getTodayShamsi().dateString);
 
+  // Initial Supabase Cloud Fetch
+  useEffect(() => {
+    if (isSupabaseConfigured()) {
+      fetchFullStateFromSupabase().then((cloudData) => {
+        if (cloudData) {
+          setAppState((prev) => {
+            const merged: FullAppState = {
+              config: cloudData.config || prev.config,
+              students: cloudData.students && cloudData.students.length > 0 ? cloudData.students : prev.students,
+              attendance: cloudData.attendance && cloudData.attendance.length > 0 ? cloudData.attendance : prev.attendance,
+              assignments: cloudData.assignments && cloudData.assignments.length > 0 ? cloudData.assignments : prev.assignments,
+              exams: cloudData.exams && cloudData.exams.length > 0 ? cloudData.exams : prev.exams,
+            };
+            saveLocalState(merged);
+            return merged;
+          });
+        }
+      }).catch((err) => {
+        console.warn('Initial Supabase fetch skipped or failed:', err);
+      });
+    }
+  }, []);
+
   // Auto-save whenever state changes
   useEffect(() => {
     saveLocalState(appState);
   }, [appState]);
 
-  // Live Persian clock
+  // Live Persian clock (Asia/Tehran)
   useEffect(() => {
     const timer = setInterval(() => {
       setCurrentTime(getCurrentTimeString());
@@ -83,9 +125,11 @@ export default function App() {
       setCurrentTeacher(matchingTeacher);
       sessionStorage.setItem('is_admin_logged_in', 'true');
       sessionStorage.setItem('current_teacher_account', JSON.stringify(matchingTeacher));
-      // Restrict activeSubject to this teacher's subject
-      setActiveSubject(matchingTeacher.subject);
-      localStorage.setItem('teacher_active_subject', matchingTeacher.subject);
+      // Restrict activeSubject to this teacher's assigned subjects
+      const assigned = getTeacherAssignedSubjects(matchingTeacher, appState.config);
+      const defaultSub = assigned[0] || matchingTeacher.subject || appState.config.subjects[0];
+      setActiveSubject(defaultSub);
+      localStorage.setItem('teacher_active_subject', defaultSub);
       return true;
     }
 
@@ -105,6 +149,8 @@ export default function App() {
     setCurrentTeacher(null);
     sessionStorage.removeItem('is_admin_logged_in');
     sessionStorage.removeItem('current_teacher_account');
+    localStorage.removeItem('teacher_active_subject');
+    localStorage.removeItem('teacher_active_class');
   };
 
   // Manager Auth Handlers
@@ -129,7 +175,8 @@ export default function App() {
     className: string,
     subject: string,
     eitaaId?: string,
-    deviceId?: string
+    deviceId?: string,
+    studentId?: string
   ) => {
     const today = getTodayShamsi();
     const timeNow = getCurrentTimeString();
@@ -137,6 +184,7 @@ export default function App() {
 
     const newRecord: AttendanceRecord = {
       id: `att-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      studentId: studentId || undefined,
       studentName,
       className,
       subject,
@@ -148,22 +196,23 @@ export default function App() {
     };
 
     setAppState((prev) => {
-      // Check if student exists in that class; if not, add them automatically
-      const studentExists = prev.students.some(
-        (s) => s.name.trim() === studentName.trim() && s.className === className
+      const existingStudent = prev.students.find(
+        (s) => (studentId && s.id === studentId) || (s.name.trim() === studentName.trim() && s.className === className)
       );
+      const studentExists = Boolean(existingStudent);
 
-      const updatedStudents = studentExists
-        ? prev.students
-        : [
-            ...prev.students,
-            {
-              id: `st-${Date.now()}-${Math.random().toString(36).substring(2, 5)}`,
-              name: studentName.trim(),
-              className,
-              createdAt: nowIso,
-            },
-          ];
+      const generatedId = studentId || `st-${Date.now()}-${Math.random().toString(36).substring(2, 5)}`;
+      const newStudent: StudentProfile = {
+        id: generatedId,
+        name: studentName.trim(),
+        className,
+        createdAt: nowIso,
+      };
+
+      const targetStudent = existingStudent || newStudent;
+      const updatedStudents = studentExists ? prev.students : [...prev.students, newStudent];
+
+      insertAttendanceToSupabase(newRecord, targetStudent);
 
       return {
         ...prev,
@@ -195,6 +244,8 @@ export default function App() {
       ...prev,
       assignments: [newAss, ...prev.assignments],
     }));
+
+    upsertAssignmentToSupabase(newAss);
   };
 
   const handleUpdateAssignment = (updatedAss: Assignment) => {
@@ -202,6 +253,8 @@ export default function App() {
       ...prev,
       assignments: prev.assignments.map((a) => (a.id === updatedAss.id ? updatedAss : a)),
     }));
+
+    upsertAssignmentToSupabase(updatedAss);
   };
 
   const handleDeleteAssignment = (id: string) => {
@@ -209,6 +262,8 @@ export default function App() {
       ...prev,
       assignments: prev.assignments.filter((a) => a.id !== id),
     }));
+
+    deleteAssignmentFromSupabase(id);
   };
 
   // Grading Handlers
@@ -217,38 +272,48 @@ export default function App() {
     studentName: string,
     grade: GradeEntry
   ) => {
-    setAppState((prev) => ({
-      ...prev,
-      assignments: prev.assignments.map((a) => {
+    setAppState((prev) => {
+      const updatedAssignments = prev.assignments.map((a) => {
         if (a.id !== assignmentId) return a;
-        return {
+        const updated = {
           ...a,
           grades: {
             ...a.grades,
             [studentName]: grade,
           },
         };
-      }),
-    }));
+        upsertAssignmentToSupabase(updated);
+        return updated;
+      });
+      return {
+        ...prev,
+        assignments: updatedAssignments,
+      };
+    });
   };
 
   const handleBatchGrades = (
     assignmentId: string,
     grades: Record<string, GradeEntry>
   ) => {
-    setAppState((prev) => ({
-      ...prev,
-      assignments: prev.assignments.map((a) => {
+    setAppState((prev) => {
+      const updatedAssignments = prev.assignments.map((a) => {
         if (a.id !== assignmentId) return a;
-        return {
+        const updated = {
           ...a,
           grades: {
             ...a.grades,
             ...grades,
           },
         };
-      }),
-    }));
+        upsertAssignmentToSupabase(updated);
+        return updated;
+      });
+      return {
+        ...prev,
+        assignments: updatedAssignments,
+      };
+    });
   };
 
   // Student Roster Handlers
@@ -277,6 +342,8 @@ export default function App() {
       ...prev,
       students: [...prev.students, newSt],
     }));
+
+    upsertStudentToSupabase(newSt);
   };
 
   const handleDeleteStudent = (id: string) => {
@@ -284,6 +351,8 @@ export default function App() {
       ...prev,
       students: prev.students.filter((s) => s.id !== id),
     }));
+
+    deleteStudentFromSupabase(id);
   };
 
   // Attendance Records Deletion
@@ -292,6 +361,8 @@ export default function App() {
       ...prev,
       attendance: prev.attendance.filter((r) => r.id !== id),
     }));
+
+    deleteAttendanceFromSupabase(id);
   };
 
   const handleClearAllAttendance = () => {
@@ -316,6 +387,8 @@ export default function App() {
       ...prev,
       exams: [newExam, ...(prev.exams || [])],
     }));
+
+    upsertExamToSupabase(newExam);
   };
 
   const handleUpdateExam = (updatedExam: Exam) => {
@@ -323,6 +396,8 @@ export default function App() {
       ...prev,
       exams: (prev.exams || []).map((e) => (e.id === updatedExam.id ? updatedExam : e)),
     }));
+
+    upsertExamToSupabase(updatedExam);
   };
 
   const handleDeleteExam = (id: string) => {
@@ -330,49 +405,63 @@ export default function App() {
       ...prev,
       exams: (prev.exams || []).filter((e) => e.id !== id),
     }));
+
+    deleteExamFromSupabase(id);
   };
 
   const handleGradeSubmission = (
     examId: string,
-    studentName: string,
+    studentKey: string,
     teacherScore: string,
     teacherFeedback: string
   ) => {
-    setAppState((prev) => ({
-      ...prev,
-      exams: (prev.exams || []).map((ex) => {
+    setAppState((prev) => {
+      const updatedExams = (prev.exams || []).map((ex) => {
         if (ex.id !== examId) return ex;
-        const currentSub = ex.submissions[studentName];
+        const currentSub = ex.submissions[studentKey] || (Object.values(ex.submissions) as ExamSubmission[]).find((s) => s.studentId === studentKey || s.studentName === studentKey);
         if (!currentSub) return ex;
-        return {
+        const actualKey = currentSub.studentId || currentSub.studentName || studentKey;
+        const updated = {
           ...ex,
           submissions: {
             ...ex.submissions,
-            [studentName]: {
+            [actualKey]: {
               ...currentSub,
               teacherScore,
               teacherFeedback,
             },
           },
         };
-      }),
-    }));
+        upsertExamToSupabase(updated);
+        return updated;
+      });
+      return {
+        ...prev,
+        exams: updatedExams,
+      };
+    });
   };
 
   const handleSubmitExam = (examId: string, submission: ExamSubmission) => {
-    setAppState((prev) => ({
-      ...prev,
-      exams: (prev.exams || []).map((ex) => {
+    setAppState((prev) => {
+      const updatedExams = (prev.exams || []).map((ex) => {
         if (ex.id !== examId) return ex;
-        return {
+        const key = submission.studentId || submission.studentName;
+        const updated = {
           ...ex,
           submissions: {
             ...ex.submissions,
-            [submission.studentName]: submission,
+            [key]: submission,
           },
         };
-      }),
-    }));
+        upsertExamToSupabase(updated);
+        return updated;
+      });
+      return {
+        ...prev,
+        exams: updatedExams,
+      };
+    });
   };
 
   // Config Update
@@ -381,18 +470,29 @@ export default function App() {
       ...prev,
       config: newConfig,
     }));
+    upsertConfigToSupabase(newConfig);
   };
 
   // Restore Backup
   const handleRestoreBackup = (parsed: any) => {
     if (parsed && (parsed.config || parsed.students || parsed.attendance)) {
-      setAppState({
+      const restored: FullAppState = {
         config: parsed.config || appState.config,
         students: parsed.students || [],
         attendance: parsed.attendance || [],
         assignments: parsed.assignments || [],
         exams: parsed.exams || [],
-      });
+      };
+      setAppState(restored);
+      saveLocalState(restored);
+
+      // Sync restored data to Supabase if connected
+      if (isSupabaseConfigured()) {
+        if (restored.config) upsertConfigToSupabase(restored.config);
+        if (restored.students && restored.students.length > 0) upsertStudentsBatchToSupabase(restored.students);
+        if (restored.assignments) restored.assignments.forEach((a) => upsertAssignmentToSupabase(a));
+        if (restored.exams) restored.exams.forEach((e) => upsertExamToSupabase(e));
+      }
     }
   };
 
@@ -401,6 +501,30 @@ export default function App() {
       ...prev,
       students: updatedStudents,
     }));
+    upsertStudentsBatchToSupabase(updatedStudents);
+  };
+
+  // Explicit Full Application State Persistence & Synchronization
+  const handleSaveAndSyncAll = () => {
+    saveLocalState(appState);
+    if (isSupabaseConfigured()) {
+      upsertConfigToSupabase(appState.config);
+      if (appState.students?.length > 0) upsertStudentsBatchToSupabase(appState.students);
+      appState.assignments?.forEach((a) => upsertAssignmentToSupabase(a));
+      appState.exams?.forEach((e) => upsertExamToSupabase(e));
+    }
+
+    if (currentTeacher) {
+      const refreshedTeacher = appState.config.teachers?.find(
+        (t) => t.id === currentTeacher.id || t.username === currentTeacher.username || t.pin === currentTeacher.pin
+      );
+      if (refreshedTeacher) {
+        setCurrentTeacher(refreshedTeacher);
+        sessionStorage.setItem('current_teacher_account', JSON.stringify(refreshedTeacher));
+      }
+    }
+    window.dispatchEvent(new Event('storage'));
+    sounds.playSuccess();
   };
 
   return (
@@ -437,6 +561,7 @@ export default function App() {
             students={appState.students}
             exams={appState.exams || []}
             isAdminLoggedIn={isAdminLoggedIn}
+            currentTeacher={currentTeacher}
             activeSubject={activeSubject}
             onSelectActiveSubject={handleSelectActiveSubject}
             onLogin={handleLogin}
@@ -456,6 +581,7 @@ export default function App() {
             onUpdateExam={handleUpdateExam}
             onDeleteExam={handleDeleteExam}
             onGradeSubmission={handleGradeSubmission}
+            onSaveChanges={handleSaveAndSyncAll}
           />
         )}
 
@@ -472,6 +598,7 @@ export default function App() {
             onUpdateConfig={handleUpdateConfig}
             onUpdateStudents={handleUpdateStudents}
             onRestoreBackup={handleRestoreBackup}
+            onSaveChanges={handleSaveAndSyncAll}
           />
         )}
 

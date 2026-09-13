@@ -19,18 +19,20 @@ import {
   Lock,
   MessageSquare
 } from 'lucide-react';
-import { Exam, QuizQuestion, ExamSubmission, AppConfig } from '../types';
+import { Exam, QuizQuestion, ExamSubmission, AppConfig, StudentProfile } from '../types';
 import { toPersianDigits, getTodayShamsi } from '../utils/persianDate';
 import { getDeviceId, getSavedEitaaId } from '../utils/deviceIdentifier';
 import confetti from 'canvas-confetti';
 
 interface StudentExamsViewProps {
   config: AppConfig;
+  students?: StudentProfile[];
   exams: Exam[];
   selectedClass: string;
   selectedSubject?: string;
   filterSubject?: string;
   onFilterSubjectChange?: (sub: string) => void;
+  studentId?: string;
   studentName: string;
   onSubmitExam: (examId: string, submission: ExamSubmission) => void;
 }
@@ -108,13 +110,37 @@ export const getScheduleStatus = (ex: Exam) => {
   };
 };
 
+export const getStudentSubmission = (
+  exam?: Exam,
+  sId?: string,
+  sName?: string,
+  sList?: StudentProfile[]
+): ExamSubmission | undefined => {
+  if (!exam || !exam.submissions) return undefined;
+  const cleanName = sName ? sName.trim() : '';
+  const targetStudent = (sList || []).find((s) => (sId && s.id === sId) || (cleanName && s.name.trim() === cleanName));
+  const targetId = targetStudent?.id || sId;
+  
+  if (targetId && exam.submissions[targetId]) {
+    return exam.submissions[targetId];
+  }
+  if (cleanName && exam.submissions[cleanName]) {
+    return exam.submissions[cleanName];
+  }
+  return Object.values(exam.submissions).find(
+    (sub) => (targetId && sub.studentId === targetId) || (cleanName && sub.studentName.trim() === cleanName)
+  );
+};
+
 export const StudentExamsView: React.FC<StudentExamsViewProps> = ({
   config,
+  students,
   exams,
   selectedClass,
   selectedSubject,
   filterSubject: propFilterSubject,
   onFilterSubjectChange,
+  studentId,
   studentName,
   onSubmitExam,
 }) => {
@@ -170,12 +196,11 @@ export const StudentExamsView: React.FC<StudentExamsViewProps> = ({
   );
 
   const activeExam = exams.find((e) => e.id === activeExamId);
-  const existingSubmission = activeExam && studentName.trim() ? activeExam.submissions[studentName.trim()] : undefined;
+  const existingSubmission = getStudentSubmission(activeExam, studentId, studentName, students);
 
   // Start exam and timer (or review submitted exam)
   const handleStartExam = (exam: Exam) => {
-    const cleanName = studentName.trim();
-    const existing = cleanName && exam.submissions ? exam.submissions[cleanName] : undefined;
+    const existing = getStudentSubmission(exam, studentId, studentName, students);
 
     if (!existing) {
       const schedule = getScheduleStatus(exam);
@@ -280,9 +305,12 @@ export const StudentExamsView: React.FC<StudentExamsViewProps> = ({
     const savedEitaa = getSavedEitaaId();
     const deviceId = getDeviceId();
 
+    const targetStudent = (students || []).find((s) => (studentId && s.id === studentId) || (studentName.trim() && s.name.trim() === studentName.trim()));
+
     const submission: ExamSubmission = {
       id: `sub-${Date.now()}`,
       examId: activeExam.id,
+      studentId: studentId || targetStudent?.id,
       studentName: studentName.trim(),
       className: selectedClass,
       submittedAt: `${today.dateString} - ساعت ${timeStr}`,
@@ -344,10 +372,12 @@ export const StudentExamsView: React.FC<StudentExamsViewProps> = ({
     const today = getTodayShamsi();
     const savedEitaa = getSavedEitaaId();
     const deviceId = getDeviceId();
+    const targetStudent = (students || []).find((s) => (studentId && s.id === studentId) || (studentName.trim() && s.name.trim() === studentName.trim()));
 
     const submission: ExamSubmission = {
       id: `sub-${Date.now()}`,
       examId: activeExam.id,
+      studentId: studentId || targetStudent?.id,
       studentName: studentName.trim(),
       className: selectedClass,
       submittedAt: `${today.dateString} - ساعت ${timeStr}`,
@@ -758,8 +788,7 @@ export const StudentExamsView: React.FC<StudentExamsViewProps> = ({
           ) : (
             <div className="grid grid-cols-1 gap-4">
               {classExams.map((ex) => {
-                const cleanName = studentName.trim();
-                const submission = cleanName && ex.submissions ? ex.submissions[cleanName] : undefined;
+                const submission = getStudentSubmission(ex, studentId, studentName, students);
                 const isSubmitted = !!submission;
                 const schedule = getScheduleStatus(ex);
                 const totalQ = ex.questions?.length || 1;

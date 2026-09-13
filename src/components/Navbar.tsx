@@ -8,11 +8,14 @@ import {
   Database,
   Lock,
   Info,
-  ShieldAlert
+  ShieldAlert,
+  CloudCheck,
+  Cloud
 } from 'lucide-react';
 import { MainTab, AppConfig } from '../types';
 import { toPersianDigits } from '../utils/persianDate';
 import { APP_VERSION_FA } from '../version';
+import { isSupabaseConfigured } from '../lib/supabase';
 
 interface NavbarProps {
   activeTab: MainTab;
@@ -79,95 +82,79 @@ export const Navbar: React.FC<NavbarProps> = ({
               <span>{toPersianDigits(currentTimeString)}</span>
             </div>
 
-            <div className="flex items-center gap-1 text-[11px] font-medium px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200">
-              <Database className="w-3 h-3" />
-              <span>{config.storageMode === 'supabase' ? 'سرور ابری فعال' : 'حافظه محلی امن'}</span>
-            </div>
+            {isSupabaseConfigured() ? (
+              <div 
+                title="پایگاه‌داده ابری Supabase متصل و همگام است"
+                className="flex items-center gap-1.5 text-[11px] font-bold px-2.5 py-1 rounded-lg bg-emerald-100 text-emerald-800 border border-emerald-300 shadow-2xs"
+              >
+                <Database className="w-3.5 h-3.5 text-emerald-600" />
+                <span>دیتابیس ابری Supabase متصل</span>
+              </div>
+            ) : (
+              <div 
+                title="داده‌ها در حافظه محلی مرورگر ذخیره می‌شوند"
+                className="flex items-center gap-1 text-[11px] font-medium px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700 border border-slate-200"
+              >
+                <Database className="w-3 h-3 text-slate-500" />
+                <span>حافظه محلی مرورگر</span>
+              </div>
+            )}
           </div>
         </div>
 
         {/* Navigation Tabs */}
         <div className="py-2 flex items-center justify-between overflow-x-auto scrollbar-none gap-2">
-          <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl">
+          <div className="flex items-center gap-1.5 bg-slate-100/90 p-1 rounded-xl border border-slate-200/60">
+            {/* ۱. ورود دانش‌آموز */}
             <button
               onClick={() => setActiveTab('student' as any)}
-              className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
+              className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs transition-all cursor-pointer whitespace-nowrap ${
                 activeTab === ('student' as any)
-                  ? 'bg-white text-blue-700 shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
+                  ? 'bg-sky-600 text-white font-bold shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60 font-medium'
               }`}
             >
               <ClipboardCheck className="w-4 h-4" />
               <span>ورود دانش‌آموز</span>
             </button>
 
-            {/* دکمه پنل دبیر و لیست کشویی انتخاب درس به عنوان زیرمجموعه یکپارچه آن */}
-            <div
-              className={`inline-flex items-center rounded-lg p-0.5 transition-all ${
-                activeTab === 'admin'
-                  ? 'bg-blue-600 text-white shadow-xs'
-                  : 'bg-slate-200/80 text-slate-700 hover:bg-slate-200'
-              }`}
-            >
-              <button
-                type="button"
-                onClick={() => setActiveTab('admin')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
-                  activeTab === 'admin' ? 'text-white' : 'text-slate-700 hover:text-blue-700'
-                }`}
-              >
-                {isAdminLoggedIn ? <ShieldCheck className="w-4 h-4" /> : <Lock className="w-4 h-4" />}
-                <span>پنل دبیر {isAdminLoggedIn && '(فعال)'}</span>
-              </button>
-
-              <div className="flex items-center pl-1 pr-1 border-r border-slate-300/80">
-                <select
-                  id="navbar-subject-select"
-                  value={activeSubject}
-                  onChange={(e) => {
-                    onSelectActiveSubject(e.target.value);
-                  }}
-                  onClick={(e) => e.stopPropagation()}
-                  className={`text-xs font-bold rounded-md px-2 py-1 cursor-pointer focus:outline-hidden transition-colors ${
-                    activeTab === 'admin'
-                      ? 'bg-blue-700 text-white border border-blue-400/50 hover:bg-blue-800'
-                      : 'bg-white text-slate-800 border border-slate-300 hover:border-slate-400 shadow-2xs'
-                  }`}
-                  title="انتخاب درس در حال مدیریت دبیر"
-                >
-                  <option value="all" className="text-slate-900 bg-white">همه درس‌ها</option>
-                  {config.subjects.map((sub) => (
-                    <option key={sub} value={sub} className="text-slate-900 bg-white">
-                      درس {sub}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-
+            {/* ۲. پنل دبیر */}
             <button
-              onClick={() => setActiveTab('app-info')}
-              className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
-                activeTab === 'app-info'
-                  ? 'bg-white text-indigo-700 shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
+              onClick={() => setActiveTab('admin')}
+              className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs transition-all cursor-pointer whitespace-nowrap ${
+                activeTab === 'admin'
+                  ? 'bg-sky-600 text-white font-bold shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60 font-medium'
               }`}
             >
-              <Info className="w-4 h-4 text-indigo-600" />
-              <span>مشخصات برنامه</span>
+              <ShieldCheck className="w-4 h-4" />
+              <span>پنل دبیر</span>
             </button>
 
-            {/* تب اختصاصی مدیریت سایت (تنظیمات، دروس، استقرار، رمزها و انتساب‌ها) */}
+            {/* ۳. پنل مدیریت */}
             <button
               onClick={() => setActiveTab('manager')}
-              className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer whitespace-nowrap border ${
+              className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs transition-all cursor-pointer whitespace-nowrap ${
                 activeTab === 'manager'
-                  ? 'bg-amber-600 text-white border-amber-600 shadow-xs'
-                  : 'bg-amber-50 text-amber-900 border-amber-200 hover:bg-amber-100'
+                  ? 'bg-sky-600 text-white font-bold shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60 font-medium'
               }`}
             >
               <ShieldAlert className="w-4 h-4" />
-              <span>پنل مدیریت سایت {isManagerLoggedIn && '(فعال)'}</span>
+              <span>پنل مدیریت</span>
+            </button>
+
+            {/* ۴. پنل مشخصات برنامه */}
+            <button
+              onClick={() => setActiveTab('app-info')}
+              className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs transition-all cursor-pointer whitespace-nowrap ${
+                activeTab === 'app-info'
+                  ? 'bg-sky-600 text-white font-bold shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60 font-medium'
+              }`}
+            >
+              <Info className="w-4 h-4" />
+              <span>پنل مشخصات برنامه</span>
             </button>
           </div>
         </div>

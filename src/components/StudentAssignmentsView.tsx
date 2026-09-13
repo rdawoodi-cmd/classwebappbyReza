@@ -26,6 +26,7 @@ interface StudentAssignmentsViewProps {
   assignments: Assignment[];
   exams?: Exam[];
   onSubmitExam?: (examId: string, submission: ExamSubmission) => void;
+  studentId?: string;
   studentName: string;
   selectedClass: string;
   selectedSubject: string;
@@ -37,6 +38,7 @@ export const StudentAssignmentsView: React.FC<StudentAssignmentsViewProps> = ({
   assignments,
   exams = [],
   onSubmitExam,
+  studentId,
   studentName,
   selectedClass,
   selectedSubject,
@@ -130,11 +132,13 @@ export const StudentAssignmentsView: React.FC<StudentAssignmentsViewProps> = ({
       {viewMode === 'exams' ? (
         <StudentExamsView
           config={config}
+          students={students}
           exams={exams}
           selectedClass={selectedClass}
           selectedSubject={selectedSubject}
           filterSubject={filterSubject}
           onFilterSubjectChange={setFilterSubject}
+          studentId={studentId}
           studentName={studentName}
           onSubmitExam={onSubmitExam || (() => {})}
         />
@@ -156,7 +160,8 @@ export const StudentAssignmentsView: React.FC<StudentAssignmentsViewProps> = ({
         ) : (
           filteredAssignments.map((item) => {
             const cleanName = studentName.trim();
-            const studentGrade = cleanName && item.grades ? item.grades[cleanName] : null;
+            const targetStudent = students.find((s) => (studentId && s.id === studentId) || s.name.trim() === cleanName);
+            const studentGrade = (targetStudent && item.grades ? (item.grades[targetStudent.id] || item.grades[targetStudent.name]) : null) || (cleanName && item.grades ? item.grades[cleanName] : null);
 
             return (
               <div

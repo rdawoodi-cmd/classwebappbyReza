@@ -34,7 +34,8 @@ import {
   ExternalLink,
   FileQuestion,
   Smartphone,
-  ShieldAlert
+  ShieldAlert,
+  LogOut
 } from 'lucide-react';
 import { 
   AttendanceRecord, 
@@ -43,14 +44,18 @@ import {
   AppConfig, 
   AdminSubTab, 
   GradeEntry,
-  Exam
+  Exam,
+  TeacherAccount,
+  AcademicTerm
 } from '../types';
-import { toPersianDigits, getTodayShamsi } from '../utils/persianDate';
+import { toPersianDigits, toEnglishDigits, getTodayShamsi, sortClassesCustom } from '../utils/persianDate';
+import { getTeacherAssignedSubjects, getTeacherAssignedClassesForSubject } from '../utils/teacherUtils';
 import { exportAttendanceToCSV, exportGradesToCSV, exportBackupJSON } from '../utils/storage';
 import { sounds } from '../utils/sound';
 import { APP_VERSION, APP_VERSION_FA, APP_BUILD_DATE_FA, APP_BUILD_NOTES } from '../version';
 import confetti from 'canvas-confetti';
 import { ExamManager } from './ExamManager';
+import { AdminClassbook } from './AdminClassbook';
 
 interface AdminPanelProps {
   config: AppConfig;
@@ -61,6 +66,7 @@ interface AdminPanelProps {
   isAdminLoggedIn: boolean;
   activeSubject?: string;
   onSelectActiveSubject?: (subj: string) => void;
+  currentTeacher?: TeacherAccount | null;
   onLogin: (pin: string) => boolean;
   onLogout: () => void;
   onUpdateConfig: (newConfig: AppConfig) => void;
@@ -78,6 +84,7 @@ interface AdminPanelProps {
   onUpdateExam?: (exam: Exam) => void;
   onDeleteExam?: (id: string) => void;
   onGradeSubmission?: (examId: string, studentName: string, teacherScore: string, teacherFeedback: string) => void;
+  onSaveChanges?: () => void;
 }
 
 export const AdminPanel: React.FC<AdminPanelProps> = ({
@@ -88,6 +95,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   isAdminLoggedIn,
   activeSubject: propActiveSubject,
   onSelectActiveSubject,
+  currentTeacher,
   onLogin,
   onLogout,
   onUpdateConfig,
@@ -106,11 +114,18 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   onUpdateExam,
   onDeleteExam,
   onGradeSubmission,
+  onSaveChanges,
 }) => {
   // Login State
   const [pinInput, setPinInput] = useState('');
   const [loginError, setLoginError] = useState('');
   const [showPin, setShowPin] = useState(false);
+  const [savedFeedback, setSavedFeedback] = useState<string | null>(null);
+
+  const showHeaderFeedback = (msg: string) => {
+    setSavedFeedback(msg);
+    setTimeout(() => setSavedFeedback(null), 3500);
+  };
 
   // Sub Tab
   const [subTab, setSubTab] = useState<AdminSubTab>('attendance');
@@ -122,6 +137,18 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     if (saved && (saved === 'all' || config.subjects.includes(saved))) return saved;
     return config.subjects[0] || 'فرهنگ و هنر';
   });
+
+  // Academic Term Selection (انتخاب ترم اول یا ترم دوم)
+  const [activeTerm, setActiveTerm] = useState<AcademicTerm>(() => {
+    const saved = localStorage.getItem('teacher_active_term');
+    if (saved === 'ترم اول' || saved === 'ترم دوم') return saved as AcademicTerm;
+    return 'ترم اول';
+  });
+
+  const handleSelectActiveTerm = (term: AcademicTerm) => {
+    setActiveTerm(term);
+    localStorage.setItem('teacher_active_term', term);
+  };
 
   useEffect(() => {
     if (propActiveSubject !== undefined && propActiveSubject !== activeSubject) {
@@ -143,13 +170,64 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     }
   };
 
+  const teacherAssignedSubjects = React.useMemo(() => {
+    return getTeacherAssignedSubjects(currentTeacher, config);
+  }, [currentTeacher, config]);
+
+  // Auto-sync activeSubject with teacher's assigned subjects
+  useEffect(() => {
+    if (currentTeacher && teacherAssignedSubjects.length > 0) {
+      if (activeSubject === 'all' || !teacherAssignedSubjects.includes(activeSubject)) {
+        const firstSub = teacherAssignedSubjects[0];
+        setActiveSubject(firstSub);
+        localStorage.setItem('teacher_active_subject', firstSub);
+        if (onSelectActiveSubject) onSelectActiveSubject(firstSub);
+        setAssSubject(firstSub);
+      }
+    }
+  }, [currentTeacher, teacherAssignedSubjects, activeSubject]);
+
+  const assignedClassesForActiveSubject = React.useMemo(() => {
+    return getTeacherAssignedClassesForSubject(currentTeacher, activeSubject, config);
+  }, [currentTeacher, activeSubject, config]);
+
+  const teacherDisplayName = currentTeacher?.name || (isAdminLoggedIn ? 'مدیریت کل سیستم' : 'دبیر محترم');
+  const subjectDisplayName = activeSubject === 'all' ? 'همه درس‌ها' : activeSubject;
+
+  // Active Class State (Controlled from Top Control Bar)
+  const [activeClass, setActiveClass] = useState<string>('all');
+
   // Attendance Sub-Tab States
   const [attSearch, setAttSearch] = useState('');
-  const [attClassFilter, setAttClassFilter] = useState('all');
+
+  // Sync activeClass when assigned classes for active subject change
+  useEffect(() => {
+    if (assignedClassesForActiveSubject.length === 0) {
+      if (activeClass !== '') setActiveClass('');
+    } else if (assignedClassesForActiveSubject.length === 1) {
+      if (activeClass !== assignedClassesForActiveSubject[0]) {
+        setActiveClass(assignedClassesForActiveSubject[0]);
+      }
+    } else {
+      if (activeClass !== 'all' && !assignedClassesForActiveSubject.includes(activeClass)) {
+        setActiveClass('all');
+      }
+    }
+  }, [assignedClassesForActiveSubject, activeClass]);
+
+  // Keep assignment form class in sync with activeClass
+  useEffect(() => {
+    if (activeClass && activeClass !== 'all') {
+      setAssClass(activeClass);
+    } else {
+      setAssClass('همه کلاس‌ها');
+    }
+  }, [activeClass]);
 
   // Assignment Form States
   const [editAssId, setEditAssId] = useState<string | null>(null);
   const [deletingAss, setDeletingAss] = useState<Assignment | null>(null);
+  const [deletingAttRecord, setDeletingAttRecord] = useState<AttendanceRecord | null>(null);
   const [showClearAttendanceModal, setShowClearAttendanceModal] = useState(false);
   const [assTitle, setAssTitle] = useState('');
   const [assClass, setAssClass] = useState('همه کلاس‌ها');
@@ -275,22 +353,33 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     );
   }
 
-  // Filter Assignments by Active Subject
+  // Filter Assignments by Active Subject, Active Class, and Active Term
   const subjectAssignments = assignments.filter((a) => {
     if (activeSubject !== 'all' && a.subject !== activeSubject) return false;
+    const itemTerm = a.term || 'ترم اول';
+    if (itemTerm !== activeTerm) return false;
+    if (activeClass && activeClass !== 'all') {
+      if (a.className !== 'همه کلاس‌ها' && a.className !== activeClass) return false;
+    } else {
+      if (a.className !== 'همه کلاس‌ها' && !assignedClassesForActiveSubject.includes(a.className)) return false;
+    }
     return true;
   });
 
   // Active Assignment for Grading
   const activeAss = subjectAssignments.find((a) => a.id === selectedAssId) || subjectAssignments[0];
 
-  // Filter Attendance by search, class, and activeSubject
+  // Filter Attendance by search, class, activeSubject, and activeTerm
   const filteredAttendance = attendance.filter((r) => {
+    const itemTerm = r.term || 'ترم اول';
+    if (itemTerm !== activeTerm) return false;
     const matchesSearch = 
       r.studentName.includes(attSearch) || 
       r.subject.includes(attSearch) || 
       (r.eitaaId && r.eitaaId.includes(attSearch));
-    const matchesClass = attClassFilter === 'all' || r.className === attClassFilter;
+    const matchesClass = activeClass && activeClass !== 'all'
+      ? r.className === activeClass
+      : (assignedClassesForActiveSubject.length > 0 ? assignedClassesForActiveSubject.includes(r.className) : true);
     const matchesSubject = activeSubject === 'all' || r.subject === activeSubject;
     return matchesSearch && matchesClass && matchesSubject;
   });
@@ -346,7 +435,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
   const handleSaveAssignment = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!assTitle.trim()) return;
+    if (!assTitle.trim()) {
+      alert('لطفاً عنوان تکلیف را وارد کنید.');
+      return;
+    }
 
     const today = getTodayShamsi();
     const savedTitle = assTitle.trim();
@@ -379,6 +471,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         title: savedTitle,
         className: assClass,
         subject: assSubject,
+        term: activeTerm,
         description: assDesc.trim(),
         shamsiDate: today.dateString,
         gradingType: assGradingType,
@@ -436,8 +529,30 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
   // Grading Save Handler
   const handleSaveSingleGrade = () => {
-    if (!activeAss || !selectedStudentForGrading) return;
-    onSaveGrade(activeAss.id, selectedStudentForGrading, {
+    if (!activeAss) return;
+    if (!selectedStudentForGrading) {
+      alert('لطفاً دانش‌آموز مورد نظر را از لیست انتخاب کنید.');
+      return;
+    }
+    if (!gradeScore || gradeScore.trim() === '') {
+      alert('لطفاً نمره دانش‌آموز را وارد کنید.');
+      return;
+    }
+
+    if (activeAss.gradingType === 'numeric') {
+      const parsed = parseFloat(toEnglishDigits(gradeScore));
+      if (isNaN(parsed) || parsed < 0 || parsed > 20) {
+        alert('خطا: نمره عددی باید مقداری بین ۰ تا ۲۰ باشد.');
+        return;
+      }
+    }
+
+    const student = students.find((s) => s.id === selectedStudentForGrading || s.name === selectedStudentForGrading);
+    const key = student?.id || selectedStudentForGrading;
+
+    onSaveGrade(activeAss.id, key, {
+      studentId: student?.id,
+      studentName: student?.name || selectedStudentForGrading,
       score: gradeScore,
       scoreType: activeAss.gradingType,
       badge: gradeBadge,
@@ -462,7 +577,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
     const fullScores: Record<string, GradeEntry> = {};
     targetStudents.forEach((st) => {
-      fullScores[st.name] = {
+      const key = st.id || st.name;
+      fullScores[key] = {
+        studentId: st.id,
+        studentName: st.name,
         score: activeAss.gradingType === 'numeric' ? '۲۰' : 'خیلی خوب',
         scoreType: activeAss.gradingType,
         badge: 'positive',
@@ -506,56 +624,128 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
   return (
     <div className="space-y-6">
-      {/* سربرگ پنل دبیر و سوییچ تب‌ها */}
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-xs p-4 sm:p-5">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-xl bg-blue-600 text-white flex items-center justify-center">
-              <ShieldCheck className="w-5 h-5" />
+      {/* سربرگ افقی و خلوت پنل دبیر */}
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-xs p-4 sm:p-5 space-y-3">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-4 flex-wrap text-xs font-bold text-slate-800">
+            <div className="flex items-center gap-1.5">
+              <ShieldCheck className="w-4 h-4 text-sky-600" />
+              <span className="text-slate-500 font-normal">نام دبیر:</span>
+              <span>{teacherDisplayName}</span>
             </div>
-            <div>
-              <h2 className="text-base font-extrabold text-slate-800">میز کار و کنترل دبیر</h2>
-              <p className="text-xs text-slate-500">
-                مدیریت حضور و غیاب، طراحی و نمره‌دهی تکالیف، ابزارهای کلاسی و آزمون‌ها
-              </p>
+
+            <div className="flex items-center gap-1.5 border-r border-slate-200 pr-4">
+              <span className="text-slate-500 font-normal">درس:</span>
+              {!currentTeacher ? (
+                <select
+                  value={activeSubject}
+                  onChange={(e) => onSelectActiveSubject ? onSelectActiveSubject(e.target.value) : handleSelectActiveSubject(e.target.value)}
+                  className="bg-slate-50 text-sky-700 font-bold px-2.5 py-1 rounded-lg border border-slate-200 cursor-pointer focus:outline-none"
+                  title="تغییر درس"
+                >
+                  <option value="all">همه درس‌ها</option>
+                  {config.subjects.map((sub) => (
+                    <option key={sub} value={sub}>{sub}</option>
+                  ))}
+                </select>
+              ) : (
+                <select
+                  value={activeSubject}
+                  onChange={(e) => onSelectActiveSubject ? onSelectActiveSubject(e.target.value) : handleSelectActiveSubject(e.target.value)}
+                  className="bg-slate-50 text-sky-700 font-bold px-2.5 py-1 rounded-lg border border-slate-200 cursor-pointer focus:outline-none"
+                  title="انتخاب درس"
+                >
+                  {teacherAssignedSubjects.map((sub) => (
+                    <option key={sub} value={sub}>{sub}</option>
+                  ))}
+                </select>
+              )}
+            </div>
+
+            <div className="flex items-center gap-1.5 border-r border-slate-200 pr-4">
+              <span className="text-slate-500 font-normal">کلاس:</span>
+              {currentTeacher && (!activeSubject || assignedClassesForActiveSubject.length === 0) ? (
+                <select
+                  disabled
+                  value=""
+                  className="bg-slate-100 text-slate-400 font-medium px-2.5 py-1 rounded-lg border border-slate-200 cursor-not-allowed focus:outline-none"
+                  title={!activeSubject ? 'ابتدا درس را انتخاب کنید' : 'هیچ کلاسی به این درس تخصیص داده نشده است'}
+                >
+                  <option value="" disabled>
+                    {!activeSubject ? 'ابتدا درس را انتخاب کنید' : 'هیچ کلاسی تخصیص نیافته'}
+                  </option>
+                </select>
+              ) : (
+                <select
+                  value={activeClass}
+                  onChange={(e) => setActiveClass(e.target.value)}
+                  className="bg-slate-50 text-emerald-700 font-bold px-2.5 py-1 rounded-lg border border-slate-200 cursor-pointer focus:outline-none"
+                  title="انتخاب کلاس"
+                >
+                  {assignedClassesForActiveSubject.length > 1 && (
+                    <option value="all">
+                      {currentTeacher ? `همه کلاس‌های من (${assignedClassesForActiveSubject.length} کلاس)` : 'همه کلاس‌ها'}
+                    </option>
+                  )}
+                  {assignedClassesForActiveSubject.map((cls) => (
+                    <option key={cls} value={cls}>{cls}</option>
+                  ))}
+                </select>
+              )}
+            </div>
+
+            <div className="flex items-center gap-1.5 border-r border-slate-200 pr-4">
+              <span className="text-slate-500 font-normal">ترم تحصیلی:</span>
+              <select
+                value={activeTerm}
+                onChange={(e) => handleSelectActiveTerm(e.target.value as AcademicTerm)}
+                className="bg-blue-50 text-blue-700 font-bold px-2.5 py-1 rounded-lg border border-blue-200 cursor-pointer focus:outline-none"
+                title="انتخاب ترم تحصیلی"
+              >
+                <option value="ترم اول">ترم اول</option>
+                <option value="ترم دوم">ترم دوم</option>
+              </select>
             </div>
           </div>
 
           <div className="flex items-center gap-2">
             <button
-              onClick={onLogout}
-              className="px-3 py-1.5 text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-xl transition-colors cursor-pointer"
+              type="button"
+              onClick={() => {
+                if (onSaveChanges) onSaveChanges();
+                showHeaderFeedback('تمامی اطلاعات، نمرات و تغییرات با موفقیت ذخیره و همگام‌سازی گردید.');
+              }}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl transition-all shadow-xs cursor-pointer"
+              title="ذخیره و همگام‌سازی تمامی تغییرات"
             >
-              خروج از پنل
+              <Check className="w-4 h-4" />
+              <span>ذخیره تغییرات</span>
+            </button>
+            <button
+              onClick={onLogout}
+              className="px-3 py-1.5 text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-xl transition-colors cursor-pointer flex items-center gap-1.5"
+            >
+              <LogOut className="w-4 h-4" />
+              <span>خروج از پنل</span>
             </button>
           </div>
         </div>
 
-        {/* نمایش درس در حال مدیریت دبیر (انتخاب شده از منوی بالای پنل) */}
-        <div className="my-3 p-3 rounded-2xl bg-slate-50 border border-slate-200 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2.5">
-            <div className="w-7 h-7 rounded-lg bg-blue-600 text-white flex items-center justify-center shrink-0 shadow-xs">
-              <BookOpen className="w-3.5 h-3.5" />
-            </div>
-            <div className="flex items-center gap-2 flex-wrap text-xs">
-              <span className="font-bold text-slate-700">درس در حال مدیریت:</span>
-              <span className="font-extrabold text-blue-800 bg-blue-100/90 border border-blue-200 px-2.5 py-0.5 rounded-lg">
-                {activeSubject === 'all' ? 'همه درس‌ها' : `درس ${activeSubject}`}
-              </span>
-            </div>
+        {savedFeedback && (
+          <div className="p-2.5 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold rounded-xl flex items-center gap-2 animate-in fade-in">
+            <Check className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span>{savedFeedback}</span>
           </div>
-          <span className="text-[11px] text-slate-400 hidden sm:inline">
-            (تغییر درس از منوی کشویی کنار دکمه پنل دبیر در بالای صفحه)
-          </span>
-        </div>
+        )}
 
         {/* ساب‌تب‌های پنل دبیر */}
-        <div className="flex items-center gap-1.5 overflow-x-auto pt-3 scrollbar-none">
+        <div className="flex items-center gap-1.5 overflow-x-auto pt-2 border-t border-slate-100 scrollbar-none">
           {[
             { id: 'attendance', label: 'سوابق حضور', icon: <UserCheck className="w-4 h-4" /> },
             { id: 'assignments', label: 'تکالیف', icon: <BookOpen className="w-4 h-4" /> },
             { id: 'grades', label: 'نمرات و بازخورد تکالیف', icon: <PenTool className="w-4 h-4" /> },
             { id: 'toolkit', label: 'پنل آزمون‌ها', icon: <FileQuestion className="w-4 h-4" /> },
+            { id: 'classbook', label: 'دفتر کلاسی', icon: <FileSpreadsheet className="w-4 h-4" /> },
           ].map((tab) => (
             <button
               key={tab.id}
@@ -582,11 +772,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
               <div>
                 <span className="text-xs text-slate-500 font-medium">
                   {activeSubject === 'all' ? 'کل رکوردهای حضور' : `رکوردهای حضور (${activeSubject})`}
+                  {activeClass !== 'all' ? ` • کلاس ${activeClass}` : ''}
                 </span>
                 <p className="text-2xl font-black text-blue-600 mt-1">
-                  {toPersianDigits(
-                    attendance.filter((r) => activeSubject === 'all' || r.subject === activeSubject).length
-                  )}
+                  {toPersianDigits(filteredAttendance.length)}
                 </p>
               </div>
               <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center">
@@ -596,8 +785,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
             <div className="bg-white p-4 rounded-xl border border-slate-200 flex items-center justify-between">
               <div>
-                <span className="text-xs text-slate-500 font-medium">دانش‌آموزان ثبت‌شده</span>
-                <p className="text-2xl font-black text-emerald-600 mt-1">{toPersianDigits(students.length)}</p>
+                <span className="text-xs text-slate-500 font-medium">
+                  دانش‌آموزان {activeClass !== 'all' ? `کلاس ${activeClass}` : 'ثبت‌شده'}
+                </span>
+                <p className="text-2xl font-black text-emerald-600 mt-1">
+                  {toPersianDigits(
+                    (activeClass === 'all' ? students : students.filter((s) => s.className === activeClass)).length
+                  )}
+                </p>
               </div>
               <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center">
                 <Users className="w-5 h-5" />
@@ -606,14 +801,13 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
             <div className="bg-white p-4 rounded-xl border border-slate-200 flex items-center justify-between">
               <div>
-                <span className="text-xs text-slate-500 font-medium">حاضرین امروز {activeSubject !== 'all' ? `(${activeSubject})` : ''}</span>
+                <span className="text-xs text-slate-500 font-medium">
+                  حاضرین امروز {activeSubject !== 'all' ? `(${activeSubject})` : ''}
+                  {activeClass !== 'all' ? ` • ${activeClass}` : ''}
+                </span>
                 <p className="text-2xl font-black text-amber-600 mt-1">
                   {toPersianDigits(
-                    attendance.filter(
-                      (r) =>
-                        r.shamsiDate === getTodayShamsi().dateString &&
-                        (activeSubject === 'all' || r.subject === activeSubject)
-                    ).length
+                    filteredAttendance.filter((r) => r.shamsiDate === getTodayShamsi().dateString).length
                   )}
                 </p>
               </div>
@@ -626,34 +820,21 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           {/* فیلترها و دکمه‌های اکشن */}
           <div className="bg-white p-4 rounded-xl border border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3">
             <div className="flex items-center gap-2 w-full sm:w-auto">
-              <div className="relative w-full sm:w-60">
+              <div className="relative w-full sm:w-72">
                 <Search className="w-4 h-4 absolute right-3 top-2.5 text-slate-400" />
                 <input
                   type="text"
-                  placeholder="جستجوی نام یا شناسه ایتا..."
+                  placeholder="جستجوی نام یا شناسه ایتا در لیست فیلتر شده..."
                   value={attSearch}
                   onChange={(e) => setAttSearch(e.target.value)}
                   className="w-full text-xs pr-9 pl-3 py-2 border border-slate-200 rounded-lg bg-slate-50 focus:bg-white focus:outline-blue-600"
                 />
               </div>
-
-              <select
-                value={attClassFilter}
-                onChange={(e) => setAttClassFilter(e.target.value)}
-                className="text-xs border border-slate-200 rounded-lg px-2.5 py-2 bg-slate-50 cursor-pointer"
-              >
-                <option value="all">همه کلاس‌ها</option>
-                {config.classes.map((c) => (
-                  <option key={c} value={c}>
-                    {c}
-                  </option>
-                ))}
-              </select>
             </div>
 
             <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
               <button
-                onClick={() => exportAttendanceToCSV(attendance.filter((r) => activeSubject === 'all' || r.subject === activeSubject))}
+                onClick={() => exportAttendanceToCSV(filteredAttendance)}
                 className="flex items-center gap-1.5 text-xs font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-3 py-2 rounded-xl transition-colors cursor-pointer"
               >
                 <FileSpreadsheet className="w-4 h-4" />
@@ -799,9 +980,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                           </td>
                           <td className="py-3 px-4 text-center">
                             <button
-                              onClick={() => onDeleteAttendanceRecord(r.id)}
-                              className="text-slate-400 hover:text-rose-600 p-1 rounded-md transition-colors cursor-pointer"
-                              title="حذف این رکورد"
+                              type="button"
+                              onClick={() => setDeletingAttRecord(r)}
+                              className="text-slate-400 hover:text-rose-600 hover:bg-rose-50 p-1.5 rounded-lg transition-colors cursor-pointer inline-flex items-center justify-center"
+                              title="حذف این رکورد حضور"
                             >
                               <Trash2 className="w-4 h-4" />
                             </button>
@@ -872,7 +1054,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                     className="w-full text-xs px-2.5 py-2 border border-slate-300 rounded-xl bg-slate-50 focus:bg-white cursor-pointer"
                   >
                     <option value="همه کلاس‌ها">همه کلاس‌ها</option>
-                    {config.classes.map((c) => (
+                    {assignedClassesForActiveSubject.map((c) => (
                       <option key={c} value={c}>
                         {c}
                       </option>
@@ -887,7 +1069,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                     onChange={(e) => setAssSubject(e.target.value)}
                     className="w-full text-xs px-2.5 py-2 border border-slate-300 rounded-xl bg-slate-50 focus:bg-white cursor-pointer"
                   >
-                    {config.subjects.map((s) => (
+                    {teacherAssignedSubjects.map((s) => (
                       <option key={s} value={s}>
                         {s}
                       </option>
@@ -964,7 +1146,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           <div className="lg:col-span-2 space-y-3">
             {(() => {
               const displayedAssignments = assignments.filter((item) => {
+                const itemTerm = item.term || 'ترم اول';
+                if (itemTerm !== activeTerm) return false;
                 if (activeSubject !== 'all' && item.subject !== activeSubject) return false;
+                if (activeClass !== 'all' && item.className !== 'همه کلاس‌ها' && item.className !== activeClass) return false;
                 return true;
               });
 
@@ -972,23 +1157,16 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 <>
                   <div className="flex items-center justify-between gap-2">
                     <h3 className="text-sm font-extrabold text-slate-800">
-                      <span>تکالیف منتشر شده {activeSubject !== 'all' ? `(درس ${activeSubject})` : ''} ({toPersianDigits(displayedAssignments.length)})</span>
+                      <span>
+                        تکالیف منتشر شده ({activeSubject !== 'all' ? `درس ${activeSubject}` : 'همه درس‌ها'} • {activeClass !== 'all' ? `کلاس ${activeClass}` : 'همه کلاس‌ها'} • {activeTerm}) ({toPersianDigits(displayedAssignments.length)})
+                      </span>
                     </h3>
-                    {activeSubject !== 'all' && (
-                      <button
-                        type="button"
-                        onClick={() => handleSelectActiveSubject('all')}
-                        className="text-xs text-blue-600 hover:text-blue-800 font-bold hover:underline cursor-pointer"
-                      >
-                        نمایش تمام دروس
-                      </button>
-                    )}
                   </div>
 
                   {displayedAssignments.length === 0 ? (
                     <div className="bg-white p-8 rounded-2xl border border-slate-200 text-center text-slate-400 text-xs">
-                      {activeSubject !== 'all'
-                        ? `تکلیفی برای درس «${activeSubject}» ثبت نشده است. از فرم روبرو برای این درس تکلیف تعریف کنید.`
+                      {activeSubject !== 'all' || activeClass !== 'all'
+                        ? `تکلیفی برای مشخصات انتخابی (${activeSubject !== 'all' ? `درس ${activeSubject}` : 'همه درس‌ها'}${activeClass !== 'all' ? ` - کلاس ${activeClass}` : ''} - ${activeTerm}) ثبت نشده است.`
                         : 'تکلیفی ثبت نشده است. از فرم روبرو تکلیف جدیدی تعریف کنید.'}
                     </div>
                   ) : (
@@ -1150,10 +1328,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                     <select
                       value={selectedStudentForGrading}
                       onChange={(e) => {
-                        const name = e.target.value;
-                        setSelectedStudentForGrading(name);
-                        if (activeAss && activeAss.grades[name]) {
-                          const g = activeAss.grades[name];
+                        const val = e.target.value;
+                        setSelectedStudentForGrading(val);
+                        const targetStudent = students.find((s) => s.id === val || s.name === val);
+                        const sId = targetStudent?.id || val;
+                        const sName = targetStudent?.name || val;
+                        const g = activeAss ? ((sId && activeAss.grades[sId]) || activeAss.grades[sName] || (Object.values(activeAss.grades || {}) as GradeEntry[]).find(item => (sId && item.studentId === sId) || item.studentName === sName)) : undefined;
+
+                        if (g) {
                           setGradeScore(g.score);
                           setGradeBadge(g.badge || '');
                           setGradeNote(g.note || '');
@@ -1168,7 +1350,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                       <option value="">-- انتخاب از لیست کلاس --</option>
                       {students
                         .filter(
-                          (s) => activeAss.className === 'همه کلاس‌ها' || s.className === activeAss.className
+                          (s) =>
+                            (activeClass === 'all' || s.className === activeClass) &&
+                            (activeAss.className === 'همه کلاس‌ها' || s.className === activeAss.className)
                         )
                         .sort((a, b) => {
                           const lastNameComparison = (a.lastName || '').localeCompare(b.lastName || '', 'fa');
@@ -1176,7 +1360,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                           return (a.firstName || a.name).localeCompare(b.firstName || b.name, 'fa');
                         })
                         .map((st) => (
-                          <option key={st.id} value={st.name}>
+                          <option key={st.id} value={st.id}>
                             {st.name} ({st.className})
                           </option>
                         ))}
@@ -1277,7 +1461,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                     <tbody className="divide-y divide-slate-100">
                       {students
                         .filter(
-                          (s) => activeAss.className === 'همه کلاس‌ها' || s.className === activeAss.className
+                          (s) =>
+                            (activeClass === 'all' || s.className === activeClass) &&
+                            (activeAss.className === 'همه کلاس‌ها' || s.className === activeAss.className)
                         )
                         .sort((a, b) => {
                           const lastNameComparison = (a.lastName || '').localeCompare(b.lastName || '', 'fa');
@@ -1285,7 +1471,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                           return (a.firstName || a.name).localeCompare(b.firstName || b.name, 'fa');
                         })
                         .map((st, idx) => {
-                          const g = activeAss.grades[st.name];
+                          const g = (st.id && activeAss.grades[st.id]) || activeAss.grades[st.name] || (Object.values(activeAss.grades || {}) as GradeEntry[]).find(item => (st.id && item.studentId === st.id) || item.studentName === st.name);
                           return (
                             <tr key={st.id} className="hover:bg-slate-50 transition-colors">
                               <td className="py-3 px-3 text-center text-slate-400 font-medium">
@@ -1324,7 +1510,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                               <td className="py-3 px-4 text-center">
                                 <button
                                   onClick={() => {
-                                    setSelectedStudentForGrading(st.name);
+                                    setSelectedStudentForGrading(st.id);
                                     if (g) {
                                       setGradeScore(g.score);
                                       setGradeBadge(g.badge || '');
@@ -1353,14 +1539,94 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       {subTab === 'toolkit' && (
         <ExamManager
           config={config}
-          exams={exams}
-          students={students}
+          exams={exams.filter(
+            (e) =>
+              (e.term || 'ترم اول') === activeTerm &&
+              (activeSubject === 'all' || e.subject === activeSubject) &&
+              (activeClass === 'all' || e.targetClass === 'همه کلاس‌ها' || e.targetClass === activeClass)
+          )}
+          students={students.filter((s) => activeClass === 'all' || s.className === activeClass)}
           activeSubject={activeSubject}
+          activeClass={activeClass}
+          activeTerm={activeTerm}
+          assignedClasses={activeClass !== 'all' ? [activeClass] : assignedClassesForActiveSubject}
+          assignedSubjects={teacherAssignedSubjects}
           onCreateExam={onCreateExam || (() => {})}
           onUpdateExam={onUpdateExam || (() => {})}
           onDeleteExam={onDeleteExam || (() => {})}
           onGradeSubmission={onGradeSubmission || (() => {})}
         />
+      )}
+
+      {/* ۵. تب دفتر کلاسی و کارنامه تجمیعی */}
+      {subTab === 'classbook' && (
+        <AdminClassbook
+          students={students.filter((s) => activeClass === 'all' || s.className === activeClass)}
+          attendance={attendance.filter(
+            (r) =>
+              (r.term || 'ترم اول') === activeTerm &&
+              (activeSubject === 'all' || r.subject === activeSubject) &&
+              (activeClass === 'all' || r.className === activeClass)
+          )}
+          assignments={assignments.filter(
+            (a) =>
+              (a.term || 'ترم اول') === activeTerm &&
+              (activeSubject === 'all' || a.subject === activeSubject) &&
+              (activeClass === 'all' || a.className === 'همه کلاس‌ها' || a.className === activeClass)
+          )}
+          exams={(exams || []).filter(
+            (e) =>
+              (e.term || 'ترم اول') === activeTerm &&
+              (activeSubject === 'all' || e.subject === activeSubject) &&
+              (activeClass === 'all' || e.targetClass === 'همه کلاس‌ها' || e.targetClass === activeClass)
+          )}
+          classes={activeClass !== 'all' ? [activeClass] : (assignedClassesForActiveSubject.length > 0 ? assignedClassesForActiveSubject : config.classes)}
+          activeSubject={activeSubject}
+          activeTerm={activeTerm}
+        />
+      )}
+
+      {/* Delete Single Attendance Record Modal */}
+      {deletingAttRecord && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 space-y-4 shadow-xl border border-slate-100">
+            <div className="flex items-center gap-3 text-rose-600">
+              <div className="w-10 h-10 rounded-xl bg-rose-50 flex items-center justify-center">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <h3 className="font-extrabold text-base text-slate-800">حذف رکورد حضور</h3>
+            </div>
+
+            <p className="text-xs text-slate-600 leading-relaxed">
+              آیا از حذف رکورد حضور دانش‌آموز <strong className="text-slate-800">«{deletingAttRecord.studentName}»</strong> در درس <strong className="text-slate-800">«{deletingAttRecord.subject}»</strong> و کلاس <strong className="text-slate-800">«{deletingAttRecord.className}»</strong> اطمینان دارید؟
+            </p>
+            <p className="text-[11px] text-slate-500 bg-slate-50 p-2.5 rounded-xl border border-slate-100">
+              📅 تاریخ ثبت: {toPersianDigits(deletingAttRecord.shamsiDate)} • ساعت: {toPersianDigits(deletingAttRecord.timeString)}
+            </p>
+
+            <div className="flex items-center justify-end gap-2.5 pt-2">
+              <button
+                type="button"
+                onClick={() => setDeletingAttRecord(null)}
+                className="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl transition-colors cursor-pointer"
+              >
+                انصراف
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const studentName = deletingAttRecord.studentName;
+                  onDeleteAttendanceRecord(deletingAttRecord.id);
+                  setDeletingAttRecord(null);
+                  showHeaderFeedback(`رکورد حضور «${studentName}» با موفقیت حذف گردید.`);
+                }}
+                className="px-4 py-2 text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-xl shadow-xs transition-colors cursor-pointer"
+              >
+                بله، رکورد حذف شود
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Delete Assignment Modal */}
@@ -1393,8 +1659,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 type="button"
                 onClick={() => {
                   if (deletingAss) {
+                    const assTitle = deletingAss.title;
                     onDeleteAssignment(deletingAss.id);
                     setDeletingAss(null);
+                    showHeaderFeedback(`تکلیف «${assTitle}» با موفقیت حذف شد.`);
                   }
                 }}
                 className="px-4 py-2 text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-xl shadow-xs transition-colors cursor-pointer"
@@ -1437,6 +1705,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 onClick={() => {
                   onClearAllAttendance();
                   setShowClearAttendanceModal(false);
+                  showHeaderFeedback('کل سوابق حضور و غیاب با موفقیت پاکسازی شدند.');
                 }}
                 className="px-4 py-2 text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-xl shadow-xs transition-colors cursor-pointer"
               >

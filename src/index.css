@@ -1,34 +1,45 @@
 @import "tailwindcss";
 
 @layer base {
+  :root {
+    --bg: #F8FAFC;
+    --ink: #0F172A;
+    --accent: #0EA5E9;
+    --accent-soft: #E0F2FE;
+    --border: #E2E8F0;
+    --card-bg: #FFFFFF;
+  }
+
   html {
-    font-size: 18px;
+    font-size: 17px;
     -webkit-text-size-adjust: 100%;
   }
 
   body {
-    font-size: 1rem;
-    line-height: 1.7;
+    background-color: var(--bg);
+    color: var(--ink);
+    font-size: 0.95rem;
+    line-height: 1.6;
+    font-family: 'Vazirmatn', 'B Nazanin', Tahoma, sans-serif;
   }
 
   body, button, input, select, textarea, *, ::before, ::after {
-    font-family: 'B Nazanin', 'BNazanin', 'B Mitra', 'BMitra', 'Sahel', 'Shabnam', 'Samim', 'Vazirmatn', 'Markazi Text', Tahoma, system-ui, sans-serif;
+    font-family: 'Vazirmatn', 'B Nazanin', Tahoma, system-ui, sans-serif;
   }
 
-  /* بهینه‌سازی خوانایی برچسب‌ها و فونت‌های ریز در نمایش فارسی */
-  .text-\[10px\], .text-\[10\.5px\], .text-\[11px\] {
-    font-size: 0.8rem;
-    line-height: 1.5;
+  .pattern-bg {
+    background-image: radial-gradient(var(--accent-soft) 1px, transparent 1px);
+    background-size: 20px 20px;
   }
 
   input, select, textarea, button {
-    font-size: 0.92rem;
+    font-size: 0.9rem;
   }
 }
 
 @media (max-width: 640px) {
   html {
-    font-size: 17.5px;
+    font-size: 17px;
   }
 }
 

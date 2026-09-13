@@ -2,22 +2,28 @@ export type Role = 'student' | 'teacher' | 'manager';
 
 export type MainTab = 'student' | 'admin' | 'manager' | 'app-info';
 
-export type AdminSubTab = 'attendance' | 'assignments' | 'grades' | 'toolkit';
+export type AdminSubTab = 'attendance' | 'assignments' | 'grades' | 'toolkit' | 'classbook';
+
+export type AcademicTerm = 'ترم اول' | 'ترم دوم';
 
 export interface TeacherAccount {
   id: string;
-  name: string; // نام دبیر (مثلا استاد داوودی)
+  name: string; // نام دبیر
   username: string; // نام کاربری یا کد دبیر
   pin: string; // رمز ورود اختصاصی دبیر
-  subject: string; // درسی که تدریس می‌کند و فقط به آن دسترسی دارد
-  allowedClasses?: string[]; // کلاس‌های مجاز (در صورت خالی بودن، همه کلاس‌ها)
+  subject?: string; // (برای سازگاری)
+  subjects: string[]; // لیست درس‌هایی که دبیر تدریس می‌کند
+  allowedClasses?: string[]; // کلاس‌های مجاز
+  subjectClasses?: Record<string, string[]>; // نگاشت کلاس‌های اختصاص داده شده به هر درس
 }
 
 export interface AttendanceRecord {
   id: string;
+  studentId?: string;
   studentName: string;
   className: string;
   subject: string;
+  term?: AcademicTerm; // ترم تحصیلی
   shamsiDate: string;
   timeString: string;
   timestamp: string; // ISO string
@@ -42,6 +48,8 @@ export interface StudentProfile {
 export type Student = StudentProfile;
 
 export interface GradeEntry {
+  studentId?: string;
+  studentName?: string;
   score: string; // "19.5" or "خیلی خوب"
   scoreType: 'numeric' | 'qualitative';
   badge?: '' | 'positive' | 'negative' | 'star';
@@ -54,6 +62,7 @@ export interface Assignment {
   title: string;
   className: string; // "همه کلاس‌ها" or specific class
   subject: string;
+  term?: AcademicTerm; // ترم تحصیلی
   description: string;
   shamsiDate: string;
   createdAt: string;
@@ -63,7 +72,7 @@ export interface Assignment {
   fileType?: string;
   gradingType: 'numeric' | 'qualitative';
   gradesPublished: boolean;
-  grades: Record<string, GradeEntry>; // studentName -> GradeEntry
+  grades: Record<string, GradeEntry>; // studentId (or studentName) -> GradeEntry
 }
 
 export interface AppConfig {
@@ -94,6 +103,7 @@ export interface QuizQuestion {
 export interface ExamSubmission {
   id: string;
   examId: string;
+  studentId?: string;
   studentName: string;
   className: string;
   submittedAt: string;
@@ -120,6 +130,7 @@ export interface Exam {
   type: 'descriptive' | 'multiple-choice'; // تشریحی با ارسال عکس یا تستی چند گزینه‌ای
   className: string; // 'همه کلاس‌ها' یا کلاس مشخص
   subject: string;
+  term?: AcademicTerm; // ترم تحصیلی
   description: string;
   durationMinutes: number; // تایمر زمان آزمون به دقیقه
   isActive: boolean; // فعال بودن برای دانش‌آموزان

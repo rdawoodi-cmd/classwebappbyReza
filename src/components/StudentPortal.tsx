@@ -28,7 +28,8 @@ interface StudentPortalProps {
     className: string,
     subject: string,
     eitaaId?: string,
-    deviceId?: string
+    deviceId?: string,
+    studentId?: string
   ) => { success: boolean; message: string; date: string; time: string };
   onSubmitExam?: (examId: string, submission: ExamSubmission) => void;
 }
@@ -48,6 +49,9 @@ export const StudentPortal: React.FC<StudentPortalProps> = ({
   const [selectedSubject, setSelectedSubject] = useState<string>(() => {
     return localStorage.getItem('last_selected_subject') || config.subjects[0] || '';
   });
+  const [studentId, setStudentId] = useState<string>(() => {
+    return localStorage.getItem('last_student_id') || '';
+  });
   const [studentName, setStudentName] = useState<string>(() => {
     return localStorage.getItem('last_student_name') || '';
   });
@@ -60,7 +64,13 @@ export const StudentPortal: React.FC<StudentPortalProps> = ({
     const info = detectEitaaUser();
     setEitaaInfo(info);
     if (!studentName && info.fullName) {
-      setStudentName(info.fullName);
+      const found = students.find((s) => s.name.trim() === info.fullName?.trim());
+      if (found) {
+        setStudentId(found.id);
+        setStudentName(found.name);
+      } else {
+        setStudentName(info.fullName);
+      }
     }
   }, []);
 
@@ -75,6 +85,7 @@ export const StudentPortal: React.FC<StudentPortalProps> = ({
 
   const handleClassChange = (newCls: string) => {
     setSelectedClass(newCls);
+    setStudentId('');
     setStudentName('');
     localStorage.setItem('last_selected_class', newCls);
   };
@@ -82,6 +93,16 @@ export const StudentPortal: React.FC<StudentPortalProps> = ({
   const handleSubjectChange = (newSub: string) => {
     setSelectedSubject(newSub);
     localStorage.setItem('last_selected_subject', newSub);
+  };
+
+  const handleStudentSelect = (id: string) => {
+    setStudentId(id);
+    const found = students.find((s) => s.id === id);
+    if (found) {
+      setStudentName(found.name);
+    } else {
+      setStudentName('');
+    }
   };
 
   const handleLoginSubmit = (e: React.FormEvent) => {
@@ -93,12 +114,15 @@ export const StudentPortal: React.FC<StudentPortalProps> = ({
     }
 
     setErrorMsg('');
+    if (studentId) {
+      localStorage.setItem('last_student_id', studentId);
+    }
     localStorage.setItem('last_student_name', cleanName);
     const deviceId = getDeviceId();
     const finalEitaaId = eitaaInfo.displayId || getSavedEitaaId() || deviceId;
 
     // ثبت حضور در لحظه ورود
-    const result = onSubmitAttendance(cleanName, selectedClass, selectedSubject, finalEitaaId, deviceId);
+    const result = onSubmitAttendance(cleanName, selectedClass, selectedSubject, finalEitaaId, deviceId, studentId || undefined);
 
     if (result.success) {
       sounds.playCheer();
@@ -110,7 +134,9 @@ export const StudentPortal: React.FC<StudentPortalProps> = ({
 
   const handleLogout = () => {
     setIsLoggedIn(false);
+    setStudentId('');
     setStudentName('');
+    localStorage.removeItem('last_student_id');
     localStorage.removeItem('last_student_name');
   };
 
@@ -197,6 +223,7 @@ export const StudentPortal: React.FC<StudentPortalProps> = ({
           assignments={assignments}
           exams={exams}
           onSubmitExam={onSubmitExam}
+          studentId={studentId}
           studentName={studentName}
           selectedClass={selectedClass}
           selectedSubject={selectedSubject}
@@ -296,15 +323,15 @@ export const StudentPortal: React.FC<StudentPortalProps> = ({
 
               <select
                 required
-                value={studentName}
-                onChange={(e) => setStudentName(e.target.value)}
+                value={studentId || (studentName ? classStudents.find(s => s.name === studentName)?.id || '' : '')}
+                onChange={(e) => handleStudentSelect(e.target.value)}
                 disabled={!selectedClass}
                 className="w-full text-xs sm:text-sm font-bold px-3.5 py-3 border border-slate-300 rounded-xl bg-slate-50 focus:bg-white focus:outline-blue-600 transition-all cursor-pointer disabled:opacity-50"
               >
                 <option value="">-- {selectedClass ? 'انتخاب نام از لیست' : 'ابتدا کلاس را انتخاب کنید'} --</option>
                 {classStudents.map((st) => (
-                  <option key={st.id} value={st.name}>
-                    {st.name}
+                  <option key={st.id} value={st.id}>
+                    {st.name} {st.code ? `(${toPersianDigits(st.code)})` : (st.fatherName ? `(فرزند ${st.fatherName})` : '')}
                   </option>
                 ))}
               </select>

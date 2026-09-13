@@ -28,12 +28,41 @@ export function loadLocalState(): FullAppState {
     const initialCfg = getInitialConfig();
     const loadedConfig: AppConfig = { ...initialCfg, ...(parsed.config || {}) };
     if (!loadedConfig.managerPin) loadedConfig.managerPin = initialCfg.managerPin;
-    if (!loadedConfig.teachers || loadedConfig.teachers.length === 0) loadedConfig.teachers = initialCfg.teachers;
+    if (!loadedConfig.teachers || loadedConfig.teachers.length === 0) {
+      loadedConfig.teachers = initialCfg.teachers;
+    } else if (loadedConfig.teachers.length < initialCfg.teachers.length) {
+      const existingIds = new Set(loadedConfig.teachers.map((t) => t.id || t.username));
+      const missing = initialCfg.teachers.filter((t) => !existingIds.has(t.id) && !existingIds.has(t.username));
+      loadedConfig.teachers = [...loadedConfig.teachers, ...missing];
+    }
     if (!loadedConfig.classEitaaLinks) loadedConfig.classEitaaLinks = initialCfg.classEitaaLinks;
     if (!loadedConfig.classSubjectEitaaLinks) loadedConfig.classSubjectEitaaLinks = initialCfg.classSubjectEitaaLinks || {};
     loadedConfig.academicYear = '۱۴۰۵ - ۱۴۰۶';
     if (loadedConfig.schoolName === 'دبیرستان دوره اول نمونه دولتی شهید چمران') {
       loadedConfig.schoolName = 'دبیرستان امام خمینی سمیرم';
+    }
+
+    // Sanitize teacher subjectClasses mapping strictly without fallback to all classes
+    if (loadedConfig.teachers && loadedConfig.classes) {
+      const classSet = new Set(loadedConfig.classes);
+      loadedConfig.teachers = loadedConfig.teachers.map((t) => {
+        const subMap: Record<string, string[]> = {};
+        if (t.subjectClasses && typeof t.subjectClasses === 'object') {
+          Object.entries(t.subjectClasses).forEach(([sub, clsList]) => {
+            if (Array.isArray(clsList)) {
+              subMap[sub] = clsList.filter((c) => classSet.has(c));
+            }
+          });
+        }
+
+        const allowed = Array.from(new Set(Object.values(subMap).flat()));
+
+        return {
+          ...t,
+          allowedClasses: allowed,
+          subjectClasses: subMap,
+        };
+      });
     }
 
     // Filter out dummy sample students, keep user created or 8-B students
@@ -161,7 +190,7 @@ export function exportGradesToCSV(assignment: Assignment, students: StudentProfi
   );
 
   targetStudents.forEach((st, idx) => {
-    const g = assignment.grades[st.name];
+    const g = (st.id && assignment.grades[st.id]) || assignment.grades[st.name] || Object.values(assignment.grades || {}).find(item => (st.id && item.studentId === st.id) || item.studentName === st.name);
     rows.push([
       (idx + 1).toString(),
       st.name,
