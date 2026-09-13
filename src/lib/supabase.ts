@@ -150,6 +150,7 @@ export async function upsertConfigToSupabase(config: AppConfig): Promise<boolean
     if (error) throw error;
     return true;
   } catch (err) {
+    console.error('upsertConfigToSupabase error:', err);
     return false;
   }
 }
@@ -173,6 +174,7 @@ export async function upsertStudentToSupabase(student: StudentProfile): Promise<
     if (error) throw error;
     return true;
   } catch (err) {
+    console.error('upsertStudentToSupabase error:', err);
     return false;
   }
 }
@@ -197,6 +199,7 @@ export async function upsertStudentsBatchToSupabase(students: StudentProfile[]):
     if (error) throw error;
     return true;
   } catch (err) {
+    console.error('upsertStudentsBatchToSupabase error:', err);
     return false;
   }
 }
@@ -209,6 +212,7 @@ export async function deleteStudentFromSupabase(id: string): Promise<boolean> {
     if (error) throw error;
     return true;
   } catch (err) {
+    console.error('deleteStudentFromSupabase error:', err);
     return false;
   }
 }
@@ -231,8 +235,8 @@ export async function insertAttendanceToSupabase(record: AttendanceRecord, stude
       time_tehran: record.timeString,
       timestamp: record.timestamp || new Date().toISOString(),
       notes: record.notes || null,
-      eitaaId: record.eitaaId || null,
-      deviceId: record.deviceId || null,
+      eitaa_id: record.eitaaId || null,
+      device_id: record.deviceId || null,
     };
     const { error } = await client.from('attendance_records').insert(payload);
     if (error) {
@@ -245,6 +249,7 @@ export async function insertAttendanceToSupabase(record: AttendanceRecord, stude
     }
     return true;
   } catch (err) {
+    console.error('insertAttendanceToSupabase error:', err);
     return false;
   }
 }
@@ -257,6 +262,7 @@ export async function deleteAttendanceFromSupabase(id: string): Promise<boolean>
     if (error) throw error;
     return true;
   } catch (err) {
+    console.error('deleteAttendanceFromSupabase error:', err);
     return false;
   }
 }
@@ -280,6 +286,7 @@ export async function upsertAssignmentToSupabase(assignment: Assignment): Promis
     if (error) throw error;
     return true;
   } catch (err) {
+    console.error('upsertAssignmentToSupabase error:', err);
     return false;
   }
 }
@@ -292,6 +299,7 @@ export async function deleteAssignmentFromSupabase(id: string): Promise<boolean>
     if (error) throw error;
     return true;
   } catch (err) {
+    console.error('deleteAssignmentFromSupabase error:', err);
     return false;
   }
 }
@@ -318,6 +326,7 @@ export async function upsertExamToSupabase(exam: Exam): Promise<boolean> {
     if (error) throw error;
     return true;
   } catch (err) {
+    console.error('upsertExamToSupabase error:', err);
     return false;
   }
 }
@@ -330,6 +339,7 @@ export async function deleteExamFromSupabase(id: string): Promise<boolean> {
     if (error) throw error;
     return true;
   } catch (err) {
+    console.error('deleteExamFromSupabase error:', err);
     return false;
   }
 }
