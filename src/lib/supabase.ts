@@ -195,8 +195,8 @@ export async function insertAttendanceToSupabase(record: AttendanceRecord, stude
       time_tehran: record.timeString,
       timestamp: record.timestamp || new Date().toISOString(),
       notes: record.notes || null,
-      eitaa_id: record.eitaaId || null,
-      device_id: record.deviceId || null,
+      eitaaId: record.eitaaId || null,
+      deviceId: record.deviceId || null,
     };
     const { error } = await client.from('attendance_records').insert(payload);
     if (error) {
